@@ -431,8 +431,7 @@ is world’s first open source data orchestration technology for analytics and A
 the cloud. It bridges the gap between data driven applications and storage systems, bringing
 data from the storage tier closer to the data driven applications and makes it easily
 accessible enabling applications to connect to numerous storage systems through a common
-interface. Alluxio’s memory-first tiered architecture enables data access at speeds orders
-of magnitude faster than existing solutions.
+interface.
 
 Presto can read and write tables stored in the Alluxio Data Orchestration System
 `Alluxio <https://www.alluxio.io/?utm_source=prestosql&utm_medium=prestodocs>`_,
@@ -443,7 +442,7 @@ for details and examples).
 Presto queries will then transparently retrieve and cache files
 or objects from a variety of disparate storage systems including HDFS and S3.
 
-Alluxio Client-side Configuration
+Alluxio Client-Side Configuration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 To configure Alluxio client-side properties on Presto, append the Alluxio
@@ -472,7 +471,6 @@ to collocate Presto workers with Alluxio workers. This allows reads and writes
 to bypass the network (*short-circuit*). See `Performance Tuning Tips for Presto with Alluxio
 <https://www.alluxio.io/blog/top-5-performance-tuning-tips-for-running-presto-on-alluxio-1/?utm_source=prestodb&utm_medium=prestodocs>`_
 for more details.
-
 
 Table Statistics
 ----------------
