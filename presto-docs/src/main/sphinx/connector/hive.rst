@@ -423,7 +423,7 @@ If your workload experiences the error *Timeout waiting for connection from
 pool*, increase the value of both ``hive.s3select-pushdown.max-connections`` and
 the maximum connections configuration for the file system you are using.
 
-Alluxio Configuration
+Alluxio Integration Configuration
 ---------------------
 
 Presto can read and write tables stored in data orchestration layer
