@@ -426,7 +426,7 @@ the maximum connections configuration for the file system you are using.
 Alluxio Integration Configuration
 ---------------------
 
-`Alluxio <https://www.alluxio.io/?utm_source=prestosql&utm_medium=prestodocs>`
+`Alluxio <https://www.alluxio.io/?utm_source=prestodb&utm_medium=prestodocs>`_
 is world’s first open source data orchestration technology for analytics and AI for
 the cloud. It bridges the gap between data driven applications and storage systems, bringing
 data from the storage tier closer to the data driven applications and makes it easily
@@ -434,10 +434,10 @@ accessible enabling applications to connect to numerous storage systems through 
 interface.
 
 Presto can read and write tables stored in the Alluxio Data Orchestration System
-`Alluxio <https://www.alluxio.io/?utm_source=prestosql&utm_medium=prestodocs>`_,
+`Alluxio <https://www.alluxio.io/?utm_source=prestodb&utm_medium=prestodocs>`_,
 leveraging Alluxio's distributed block-level read/write caching functionality.
 The tables must be created in the Hive metastore with the ``alluxio://`` location prefix
-(see `Running Apache Hive with Alluxio <https://docs.alluxio.io/os/user/2.0/en/compute/Hive.html>`_
+(see `Running Apache Hive with Alluxio <https://docs.alluxio.io/os/user/2.1/en/compute/Hive.html>`_
 for details and examples).
 Presto queries will then transparently retrieve and cache files
 or objects from a variety of disparate storage systems including HDFS and S3.
@@ -456,7 +456,7 @@ Update the Presto :ref:`presto_jvm_config` file ``etc/jvm.config`` to include th
 
 The advantage of this approach is that all the Alluxio properties are set in
 the single ``alluxio-site.properties`` file. For details, see `Customize Alluxio User Properties
-<https://docs.alluxio.io/os/user/2.0/en/compute/Presto.html#customize-alluxio-user-properties>`_.
+<https://docs.alluxio.io/os/user/2.1/en/compute/Presto.html#customize-alluxio-user-properties>`_.
 
 Alternatively, add Alluxio configuration properties to the Hadoop configuration
 files (``core-site.xml``, ``hdfs-site.xml``) and configure the Hive connector
