@@ -426,9 +426,16 @@ the maximum connections configuration for the file system you are using.
 Alluxio Integration Configuration
 ---------------------
 
-Presto can read and write tables stored in data orchestration layer
+Alluxio is world’s first open source data orchestration technology for analytics and AI for
+the cloud. It bridges the gap between data driven applications and storage systems, bringing
+data from the storage tier closer to the data driven applications and makes it easily
+accessible enabling applications to connect to numerous storage systems through a common
+interface. Alluxio’s memory-first tiered architecture enables data access at speeds orders
+of magnitude faster than existing solutions.
+
+Presto can read and write tables stored in the Alluxio Data Orchestration System
 `Alluxio <https://www.alluxio.io/?utm_source=prestosql&utm_medium=prestodocs>`_,
-using Alluxio as a distributed block-level read/write caching engine.
+leveraging Alluxio's distributed block-level read/write caching functionality.
 The tables must be created in the Hive metastore with the ``alluxio://`` location prefix
 (see `Running Apache Hive with Alluxio <https://docs.alluxio.io/os/user/2.0/en/compute/Hive.html>`_
 for details and examples).
