@@ -426,7 +426,8 @@ the maximum connections configuration for the file system you are using.
 Alluxio Integration Configuration
 ---------------------
 
-Alluxio is world’s first open source data orchestration technology for analytics and AI for
+`Alluxio <https://www.alluxio.io/?utm_source=prestosql&utm_medium=prestodocs>`
+is world’s first open source data orchestration technology for analytics and AI for
 the cloud. It bridges the gap between data driven applications and storage systems, bringing
 data from the storage tier closer to the data driven applications and makes it easily
 accessible enabling applications to connect to numerous storage systems through a common
