@@ -21,6 +21,7 @@ import com.facebook.presto.sql.tree.Statement;
 import com.facebook.presto.sql.tree.Table;
 import com.facebook.presto.verifier.checksum.ChecksumResult;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
+import com.facebook.presto.verifier.event.DeterminismAnalysisDetails;
 import com.facebook.presto.verifier.event.DeterminismAnalysisRun;
 import com.facebook.presto.verifier.prestoaction.PrestoAction;
 import com.facebook.presto.verifier.rewrite.QueryRewriter;
@@ -29,6 +30,7 @@ import com.google.common.collect.ImmutableSet;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -47,8 +49,8 @@ import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DET
 import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_LIMIT_CLAUSE;
 import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_ROW_COUNT;
 import static com.facebook.presto.verifier.framework.QueryStage.DETERMINISM_ANALYSIS_CHECKSUM;
-import static com.facebook.presto.verifier.framework.VerifierUtil.callWithQueryStatsConsumer;
-import static com.facebook.presto.verifier.framework.VerifierUtil.runWithQueryStatsConsumer;
+import static com.facebook.presto.verifier.framework.VerifierUtil.callAndConsume;
+import static com.facebook.presto.verifier.framework.VerifierUtil.runAndConsume;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -89,7 +91,7 @@ public class DeterminismAnalyzer
         this.handleLimitQuery = config.isHandleLimitQuery();
     }
 
-    protected DeterminismAnalysis analyze(QueryBundle control, ChecksumResult controlChecksum)
+    protected DeterminismAnalysis analyze(QueryBundle control, ChecksumResult controlChecksum, DeterminismAnalysisDetails.Builder determinismAnalysisDetails)
     {
         // Handle mutable catalogs
         if (isNonDeterministicCatalogReferenced(control.getQuery())) {
@@ -104,12 +106,12 @@ public class DeterminismAnalyzer
             for (int i = 0; i < maxAnalysisRuns; i++) {
                 QueryBundle queryBundle = queryRewriter.rewriteQuery(sourceQuery.getControlQuery(), CONTROL);
                 queryBundles.add(queryBundle);
-                DeterminismAnalysisRun.Builder run = verificationContext.startDeterminismAnalysisRun().setTableName(queryBundle.getTableName().toString());
+                DeterminismAnalysisRun.Builder run = determinismAnalysisDetails.addRun().setTableName(queryBundle.getTableName().toString());
 
-                runWithQueryStatsConsumer(() -> setupAndRun(prestoAction, queryBundle, true), stats -> run.setQueryId(stats.getQueryId()));
+                runAndConsume(() -> setupAndRun(prestoAction, queryBundle, true), stats -> run.setQueryId(stats.getQueryId()));
 
                 Query checksumQuery = checksumValidator.generateChecksumQuery(queryBundle.getTableName(), columns);
-                ChecksumResult testChecksum = getOnlyElement(callWithQueryStatsConsumer(
+                ChecksumResult testChecksum = getOnlyElement(callAndConsume(
                         () -> prestoAction.execute(checksumQuery, DETERMINISM_ANALYSIS_CHECKSUM, ChecksumResult::fromResultSet),
                         stats -> run.setChecksumQueryId(stats.getQueryId())).getResults());
 
@@ -125,7 +127,7 @@ public class DeterminismAnalyzer
                     handleLimitQuery,
                     control.getQuery(),
                     controlChecksum.getRowCount(),
-                    verificationContext).analyze();
+                    determinismAnalysisDetails).analyze();
 
             switch (limitQueryAnalysis) {
                 case NON_DETERMINISTIC:
@@ -147,7 +149,7 @@ public class DeterminismAnalyzer
         }
         finally {
             if (runTeardown) {
-                queryBundles.forEach(bundle -> teardownSafely(prestoAction, bundle));
+                queryBundles.forEach(bundle -> teardownSafely(prestoAction, Optional.of(bundle)));
             }
         }
     }

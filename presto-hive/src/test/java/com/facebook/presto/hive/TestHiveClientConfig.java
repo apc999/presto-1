@@ -73,6 +73,7 @@ public class TestHiveClientConfig
                 .setRespectTableFormat(true)
                 .setImmutablePartitions(false)
                 .setInsertOverwriteImmutablePartitionEnabled(false)
+                .setFailFastOnInsertIntoImmutablePartitionsEnabled(true)
                 .setSortedWritingEnabled(true)
                 .setMaxPartitionsPerWriter(100)
                 .setMaxOpenSortFiles(50)
@@ -130,7 +131,8 @@ public class TestHiveClientConfig
                 .setAdaptiveFilterReorderingEnabled(true)
                 .setFileStatusCacheExpireAfterWrite(new Duration(0, TimeUnit.SECONDS))
                 .setFileStatusCacheMaxSize(0)
-                .setFileStatusCacheTables(""));
+                .setFileStatusCacheTables("")
+                .setPageFileStripeMaxSize(new DataSize(24, Unit.MEGABYTE)));
     }
 
     @Test
@@ -164,6 +166,7 @@ public class TestHiveClientConfig
                 .put("hive.respect-table-format", "false")
                 .put("hive.immutable-partitions", "true")
                 .put("hive.insert-overwrite-immutable-partitions-enabled", "true")
+                .put("hive.fail-fast-on-insert-into-immutable-partitions-enabled", "false")
                 .put("hive.max-partitions-per-writers", "222")
                 .put("hive.max-open-sort-files", "333")
                 .put("hive.write-validation-threads", "11")
@@ -224,6 +227,7 @@ public class TestHiveClientConfig
                 .put("hive.file-status-cache-size", "1000")
                 .put("hive.file-status-cache-expire-time", "30m")
                 .put("hive.data-caching-directory-path", "/data/cache")
+                .put("hive.pagefile.writer.stripe-max-size", "1kB")
                 .build();
 
         HiveClientConfig expected = new HiveClientConfig()
@@ -255,6 +259,7 @@ public class TestHiveClientConfig
                 .setRespectTableFormat(false)
                 .setImmutablePartitions(true)
                 .setInsertOverwriteImmutablePartitionEnabled(true)
+                .setFailFastOnInsertIntoImmutablePartitionsEnabled(false)
                 .setMaxPartitionsPerWriter(222)
                 .setMaxOpenSortFiles(333)
                 .setWriteValidationThreads(11)
@@ -314,7 +319,8 @@ public class TestHiveClientConfig
                 .setFileStatusCacheTables("foo.bar1,foo.bar2")
                 .setFileStatusCacheMaxSize(1000)
                 .setFileStatusCacheExpireAfterWrite(new Duration(30, TimeUnit.MINUTES))
-                .setDataCachingDirectory("/data/cache");
+                .setDataCachingDirectory("/data/cache")
+                .setPageFileStripeMaxSize(new DataSize(1, Unit.KILOBYTE));
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.spi.SchemaTableName;
 import com.google.common.cache.Cache;
@@ -21,7 +22,6 @@ import com.google.common.cache.Weigher;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.Duration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.weakref.jmx.Managed;
@@ -33,17 +33,16 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
-import static com.facebook.presto.hive.util.HiveFileIterator.NestedDirectoryPolicy;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Objects.requireNonNull;
 
 public class CachingDirectoryLister
         implements DirectoryLister
 {
     private final Cache<Path, List<HiveFileInfo>> cache;
-    private final Set<SchemaTableName> cachedTableNames;
+    private final CachedTableChecker cachedTableChecker;
 
     protected final DirectoryLister delegate;
 
@@ -54,12 +53,10 @@ public class CachingDirectoryLister
                 delegate,
                 hiveClientConfig.getFileStatusCacheExpireAfterWrite(),
                 hiveClientConfig.getFileStatusCacheMaxSize(),
-                hiveClientConfig.getFileStatusCacheTables().stream()
-                        .map(CachingDirectoryLister::parseTableName)
-                        .collect(Collectors.toSet()));
+                hiveClientConfig.getFileStatusCacheTables());
     }
 
-    public CachingDirectoryLister(DirectoryLister delegate, Duration expireAfterWrite, long maxSize, Set<SchemaTableName> tables)
+    public CachingDirectoryLister(DirectoryLister delegate, Duration expireAfterWrite, long maxSize, List<String> tables)
     {
         this.delegate = requireNonNull(delegate, "delegate is null");
         cache = CacheBuilder.newBuilder()
@@ -68,7 +65,7 @@ public class CachingDirectoryLister
                 .expireAfterWrite(expireAfterWrite.toMillis(), TimeUnit.MILLISECONDS)
                 .recordStats()
                 .build();
-        cachedTableNames = ImmutableSet.copyOf(requireNonNull(tables, "cachedTableNames is null"));
+        this.cachedTableChecker = new CachedTableChecker(requireNonNull(tables, "tables is null"));
     }
 
     private static SchemaTableName parseTableName(String tableName)
@@ -79,7 +76,13 @@ public class CachingDirectoryLister
     }
 
     @Override
-    public Iterator<HiveFileInfo> list(FileSystem fileSystem, Table table, Path path, NamenodeStats namenodeStats, NestedDirectoryPolicy nestedDirectoryPolicy, PathFilter pathFilter)
+    public Iterator<HiveFileInfo> list(
+            ExtendedFileSystem fileSystem,
+            Table table,
+            Path path,
+            NamenodeStats namenodeStats,
+            NestedDirectoryPolicy nestedDirectoryPolicy,
+            PathFilter pathFilter)
     {
         SchemaTableName schemaTableName = new SchemaTableName(table.getDatabaseName(), table.getTableName());
 
@@ -89,7 +92,7 @@ public class CachingDirectoryLister
         }
 
         Iterator<HiveFileInfo> iterator = delegate.list(fileSystem, table, path, namenodeStats, nestedDirectoryPolicy, pathFilter);
-        if (cachedTableNames.contains(schemaTableName)) {
+        if (cachedTableChecker.isCachedTable(schemaTableName)) {
             return cachingIterator(iterator, path);
         }
         return iterator;
@@ -155,5 +158,30 @@ public class CachingDirectoryLister
     public long getRequestCount()
     {
         return cache.stats().requestCount();
+    }
+
+    private static class CachedTableChecker
+    {
+        private final Set<SchemaTableName> cachedTableNames;
+        private final boolean cacheAllTables;
+
+        public CachedTableChecker(List<String> cachedTables)
+        {
+            cacheAllTables = cachedTables.contains("*");
+            if (cacheAllTables) {
+                checkArgument(cachedTables.size() == 1, "Only '*' is expected when caching all tables");
+                this.cachedTableNames = ImmutableSet.of();
+            }
+            else {
+                this.cachedTableNames = cachedTables.stream()
+                        .map(CachingDirectoryLister::parseTableName)
+                        .collect(toImmutableSet());
+            }
+        }
+
+        public boolean isCachedTable(SchemaTableName schemaTableName)
+        {
+            return cacheAllTables || cachedTableNames.contains(schemaTableName);
+        }
     }
 }

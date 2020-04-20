@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.orc.reader;
 
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
-import com.facebook.presto.memory.context.LocalMemoryContext;
+import com.facebook.presto.orc.OrcAggregatedMemoryContext;
+import com.facebook.presto.orc.OrcLocalMemoryContext;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
@@ -59,6 +59,7 @@ import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStr
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.airlift.slice.SizeOf.sizeOf;
@@ -80,7 +81,7 @@ public class StructSelectiveStreamReader
     private final SelectiveStreamReader[] orderedNestedReaders;
     private final boolean missingFieldFilterIsFalse;
 
-    private final LocalMemoryContext systemMemoryContext;
+    private final OrcLocalMemoryContext systemMemoryContext;
 
     private int readOffset;
     private int nestedReadOffset;
@@ -107,10 +108,10 @@ public class StructSelectiveStreamReader
             Optional<Type> outputType,
             DateTimeZone hiveStorageTimeZone,
             boolean legacyMapSubscript,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         this.streamDescriptor = requireNonNull(streamDescriptor, "streamDescriptor is null");
-        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newLocalMemoryContext(StructSelectiveStreamReader.class.getSimpleName());
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newOrcLocalMemoryContext(StructSelectiveStreamReader.class.getSimpleName());
         this.outputRequired = requireNonNull(outputType, "outputType is null").isPresent();
         this.outputType = outputType.orElse(null);
 
@@ -166,13 +167,17 @@ public class StructSelectiveStreamReader
                 boolean requiredField = requiredFields.map(names -> names.containsKey(fieldName)).orElse(outputRequired);
                 Optional<Type> fieldOutputType = Optional.ofNullable(nestedTypes.get(fieldName)).map(Field::getType);
 
-                if (requiredField || fieldsWithFilters.contains(fieldName)) {
-                    Map<Subfield, TupleDomainFilter> nestedFilters = filters.entrySet().stream()
-                            .filter(entry -> entry.getKey().getPath().size() > 0)
-                            .filter(entry -> ((Subfield.NestedField) entry.getKey().getPath().get(0)).getName().equalsIgnoreCase(fieldName))
-                            .collect(toImmutableMap(entry -> entry.getKey().tail(fieldName), Map.Entry::getValue));
-                    List<Subfield> nestedRequiredSubfields = requiredFields.map(names -> names.get(fieldName)).orElse(ImmutableList.of());
-                    if (nestedStream != null) {
+                if (nestedStream == null) {
+                    verify(fieldOutputType.isPresent(), "Missing output type for subfield " + fieldName);
+                    nestedReaders.put(fieldName, new MissingFieldStreamReader(fieldOutputType.get()));
+                }
+                else {
+                    if (requiredField || fieldsWithFilters.contains(fieldName)) {
+                        Map<Subfield, TupleDomainFilter> nestedFilters = filters.entrySet().stream()
+                                .filter(entry -> entry.getKey().getPath().size() > 0)
+                                .filter(entry -> ((Subfield.NestedField) entry.getKey().getPath().get(0)).getName().equalsIgnoreCase(fieldName))
+                                .collect(toImmutableMap(entry -> entry.getKey().tail(fieldName), Map.Entry::getValue));
+                        List<Subfield> nestedRequiredSubfields = requiredFields.map(names -> names.get(fieldName)).orElse(ImmutableList.of());
                         SelectiveStreamReader nestedReader = SelectiveStreamReaders.createStreamReader(
                                 nestedStream,
                                 nestedFilters,
@@ -180,15 +185,12 @@ public class StructSelectiveStreamReader
                                 nestedRequiredSubfields,
                                 hiveStorageTimeZone,
                                 legacyMapSubscript,
-                                systemMemoryContext.newAggregatedMemoryContext());
+                                systemMemoryContext.newOrcAggregatedMemoryContext());
                         nestedReaders.put(fieldName, nestedReader);
                     }
                     else {
-                        nestedReaders.put(fieldName, new MissingFieldStreamReader(fieldOutputType.get()));
+                        nestedReaders.put(fieldName, new PruningStreamReader(nestedStream, fieldOutputType));
                     }
-                }
-                else {
-                    nestedReaders.put(fieldName, new PruningStreamReader(nestedStream, fieldOutputType));
                 }
             }
 
@@ -607,6 +609,15 @@ public class StructSelectiveStreamReader
     @Override
     public void close()
     {
+        nestedReaders.values().stream().forEach(SelectiveStreamReader::close);
+
+        outputPositions = null;
+        nulls = null;
+        nestedOutputPositions = null;
+        nestedPositions = null;
+
+        presentStream = null;
+        presentStreamSource = null;
         systemMemoryContext.close();
     }
 
@@ -748,6 +759,7 @@ public class StructSelectiveStreamReader
         @Override
         public void close()
         {
+            outputPositions = null;
         }
 
         @Override

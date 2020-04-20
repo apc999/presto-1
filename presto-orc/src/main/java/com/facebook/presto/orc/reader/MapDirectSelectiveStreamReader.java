@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.orc.reader;
 
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
-import com.facebook.presto.memory.context.LocalMemoryContext;
+import com.facebook.presto.orc.OrcAggregatedMemoryContext;
+import com.facebook.presto.orc.OrcLocalMemoryContext;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.TupleDomainFilter.BigintRange;
@@ -79,7 +79,7 @@ public class MapDirectSelectiveStreamReader
     private final SelectiveStreamReader keyReader;
     private final SelectiveStreamReader valueReader;
 
-    private final LocalMemoryContext systemMemoryContext;
+    private final OrcLocalMemoryContext systemMemoryContext;
 
     private int readOffset;
     private int nestedReadOffset;
@@ -114,13 +114,13 @@ public class MapDirectSelectiveStreamReader
             Optional<Type> outputType,
             DateTimeZone hiveStorageTimeZone,
             boolean legacyMapSubscript,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         checkArgument(filters.keySet().stream().map(Subfield::getPath).allMatch(List::isEmpty), "filters on nested columns are not supported yet");
 
         this.streamDescriptor = requireNonNull(streamDescriptor, "streamDescriptor is null");
         this.legacyMapSubscript = legacyMapSubscript;
-        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newLocalMemoryContext(MapDirectSelectiveStreamReader.class.getSimpleName());
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null").newOrcLocalMemoryContext(MapDirectSelectiveStreamReader.class.getSimpleName());
         this.outputRequired = requireNonNull(outputType, "outputType is null").isPresent();
         this.outputType = outputType.map(MapType.class::cast).orElse(null);
 
@@ -144,8 +144,8 @@ public class MapDirectSelectiveStreamReader
                         .collect(toImmutableList());
             }
 
-            this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
-            this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, elementRequiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newAggregatedMemoryContext());
+            this.keyReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(0), keyFilter, keyOutputType, ImmutableList.of(), hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
+            this.valueReader = SelectiveStreamReaders.createStreamReader(nestedStreams.get(1), ImmutableMap.of(), valueOutputType, elementRequiredSubfields, hiveStorageTimeZone, legacyMapSubscript, systemMemoryContext.newOrcAggregatedMemoryContext());
         }
         else {
             this.keyReader = null;
@@ -292,6 +292,7 @@ public class MapDirectSelectiveStreamReader
 
         int streamPosition = 0;
         int nestedOffset = 0;
+        int nestedPositionCount = 0;
 
         for (int i = 0; i < positionCount; i++) {
             int position = positions[i];
@@ -307,6 +308,7 @@ public class MapDirectSelectiveStreamReader
             nestedLengths[i] = length;
             nestedOffsets[i] = nestedOffset;
             nestedOffset += length;
+            nestedPositionCount += length;
         }
 
         outputPositionCount = positionCount;
@@ -314,7 +316,7 @@ public class MapDirectSelectiveStreamReader
 
         if (outputRequired) {
             nestedOffsets[positionCount] = nestedOffset;
-            int nestedPositionCount = populateNestedPositions(positionCount, nestedOffset);
+            populateNestedPositions(positionCount, nestedPositionCount);
             readKeyValueStreams(nestedPositionCount);
         }
         nestedReadOffset += nestedOffset;
@@ -336,6 +338,7 @@ public class MapDirectSelectiveStreamReader
         int streamPosition = 0;
         int nonNullPositionCount = 0;
         int nestedOffset = 0;
+        int nestedPositionCount = 0;
 
         for (int i = 0; i < positionCount; i++) {
             int position = positions[i];
@@ -358,6 +361,7 @@ public class MapDirectSelectiveStreamReader
                         nestedLengths[nonNullPositionCount] = length;
                         nestedOffsets[nonNullPositionCount] = nestedOffset;
                         nonNullPositionCount++;
+                        nestedPositionCount += length;
                     }
 
                     outputPositions[outputPositionCount] = position;
@@ -383,7 +387,7 @@ public class MapDirectSelectiveStreamReader
         }
         else if (outputRequired) {
             nestedOffsets[nonNullPositionCount] = nestedOffset;
-            int nestedPositionCount = populateNestedPositions(nonNullPositionCount, nestedOffset);
+            populateNestedPositions(nonNullPositionCount, nestedPositionCount);
             readKeyValueStreams(nestedPositionCount);
         }
 
@@ -391,16 +395,15 @@ public class MapDirectSelectiveStreamReader
         nestedReadOffset += nestedOffset;
     }
 
-    private int populateNestedPositions(int positionCount, int nestedOffset)
+    private void populateNestedPositions(int positionCount, int nestedPositionCount)
     {
-        nestedPositions = ensureCapacity(nestedPositions, nestedOffset);
-        int nestedPositionCount = 0;
+        nestedPositions = ensureCapacity(nestedPositions, nestedPositionCount);
+        int index = 0;
         for (int i = 0; i < positionCount; i++) {
             for (int j = 0; j < nestedLengths[i]; j++) {
-                nestedPositions[nestedPositionCount++] = nestedOffsets[i] + j;
+                nestedPositions[index++] = nestedOffsets[i] + j;
             }
         }
-        return nestedPositionCount;
     }
 
     private void readKeyValueStreams(int positionCount)
@@ -628,7 +631,7 @@ public class MapDirectSelectiveStreamReader
         outputPositionCount = positionCount;
     }
 
-    private BlockLease newLease(Block block, BlockLease...fieldBlockLeases)
+    private BlockLease newLease(Block block, BlockLease... fieldBlockLeases)
     {
         valuesInUse = true;
         return ClosingBlockLease.newLease(block, () -> {
@@ -655,6 +658,26 @@ public class MapDirectSelectiveStreamReader
     @Override
     public void close()
     {
+        if (keyReader != null) {
+            keyReader.close();
+        }
+        if (valueReader != null) {
+            valueReader.close();
+        }
+
+        nestedOffsets = null;
+        offsets = null;
+        nulls = null;
+        outputPositions = null;
+        nestedLengths = null;
+        nestedPositions = null;
+        nestedOutputPositions = null;
+
+        lengthStream = null;
+        lengthStreamSource = null;
+        presentStream = null;
+        lengthStreamSource = null;
+
         systemMemoryContext.close();
     }
 

@@ -45,8 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
-import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.orc.NoopOrcAggregatedMemoryContext.NOOP_ORC_AGGREGATED_MEMORY_CONTEXT;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
 import static com.facebook.presto.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
 import static com.facebook.presto.orc.OrcWriteValidation.OrcWriteValidationMode.BOTH;
@@ -100,7 +99,7 @@ public class TestStructBatchStreamReader
 
         write(tempFile, writerType, writerData);
         RowBlock readBlock = read(tempFile, readerType);
-        List actual = (List) readerType.getObjectValue(SESSION, readBlock, 0);
+        List actual = (List) readerType.getObjectValue(SESSION.getSqlFunctionProperties(), readBlock, 0);
 
         assertEquals(actual.size(), readerFields.size());
         assertEquals(actual.get(0), "field_a_value");
@@ -123,7 +122,7 @@ public class TestStructBatchStreamReader
 
         write(tempFile, writerType, writerData);
         RowBlock readBlock = read(tempFile, readerType);
-        List actual = (List) readerType.getObjectValue(SESSION, readBlock, 0);
+        List actual = (List) readerType.getObjectValue(SESSION.getSqlFunctionProperties(), readBlock, 0);
 
         assertEquals(actual.size(), readerFields.size());
         assertEquals(actual.get(0), "fieldAValue");
@@ -146,7 +145,7 @@ public class TestStructBatchStreamReader
 
         write(tempFile, writerType, writerData);
         RowBlock readBlock = read(tempFile, readerType);
-        List actual = (List) readerType.getObjectValue(SESSION, readBlock, 0);
+        List actual = (List) readerType.getObjectValue(SESSION.getSqlFunctionProperties(), readBlock, 0);
 
         assertEquals(actual.size(), readerFields.size());
         assertEquals(actual.get(0), "fieldAValue");
@@ -186,7 +185,7 @@ public class TestStructBatchStreamReader
 
         write(tempFile, writerType, writerData);
         RowBlock readBlock = read(tempFile, readerType);
-        List actual = (List) readerType.getObjectValue(SESSION, readBlock, 0);
+        List actual = (List) readerType.getObjectValue(SESSION.getSqlFunctionProperties(), readBlock, 0);
 
         assertEquals(actual.size(), readerFields.size());
         assertEquals(actual.get(0), "field_a_value");
@@ -210,7 +209,7 @@ public class TestStructBatchStreamReader
 
         write(tempFile, writerType, writerData);
         RowBlock readBlock = read(tempFile, readerType);
-        List actual = (List) readerType.getObjectValue(SESSION, readBlock, 0);
+        List actual = (List) readerType.getObjectValue(SESSION.getSqlFunctionProperties(), readBlock, 0);
 
         assertEquals(actual.size(), readerFields.size());
         assertEquals(actual.get(0), "field_a_value");
@@ -221,7 +220,7 @@ public class TestStructBatchStreamReader
             throws IOException
     {
         OrcWriter writer = new OrcWriter(
-                new OutputStreamOrcDataSink(new FileOutputStream(tempFile.getFile())),
+                new OutputStreamDataSink(new FileOutputStream(tempFile.getFile())),
                 ImmutableList.of(STRUCT_COL_NAME),
                 ImmutableList.of(writerType),
                 ORC,
@@ -270,12 +269,13 @@ public class TestStructBatchStreamReader
                 ORC,
                 new StorageOrcFileTailSource(),
                 new StorageStripeMetadataSource(),
+                NOOP_ORC_AGGREGATED_MEMORY_CONTEXT,
                 new OrcReaderOptions(
                         dataSize,
                         dataSize,
                         dataSize,
                         false),
-                DEFAULT_HIVE_FILE_CONTEXT);
+                false);
 
         Map<Integer, Type> includedColumns = new HashMap<>();
         includedColumns.put(0, readerType);
@@ -284,7 +284,7 @@ public class TestStructBatchStreamReader
                 includedColumns,
                 OrcPredicate.TRUE,
                 UTC,
-                newSimpleAggregatedMemoryContext(),
+                new TestingHiveOrcAggregatedMemoryContext(),
                 OrcReader.INITIAL_BATCH_SIZE);
 
         recordReader.nextBatch();

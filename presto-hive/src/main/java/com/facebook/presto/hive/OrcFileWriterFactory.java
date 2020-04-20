@@ -16,13 +16,13 @@ package com.facebook.presto.hive;
 import com.facebook.presto.hive.metastore.MetastoreUtil;
 import com.facebook.presto.hive.metastore.StorageFormat;
 import com.facebook.presto.hive.orc.HdfsOrcDataSource;
-import com.facebook.presto.orc.OrcDataSink;
+import com.facebook.presto.orc.DataSink;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcDataSourceId;
 import com.facebook.presto.orc.OrcEncoding;
 import com.facebook.presto.orc.OrcWriterOptions;
 import com.facebook.presto.orc.OrcWriterStats;
-import com.facebook.presto.orc.OutputStreamOrcDataSink;
+import com.facebook.presto.orc.OutputStreamDataSink;
 import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
@@ -160,7 +160,7 @@ public class OrcFileWriterFactory
 
         try {
             FileSystem fileSystem = hdfsEnvironment.getFileSystem(session.getUser(), path, configuration);
-            OrcDataSink orcDataSink = createOrcDataSink(session, fileSystem, path);
+            DataSink dataSink = createDataSink(session, fileSystem, path);
 
             Optional<Supplier<OrcDataSource>> validationInputFactory = Optional.empty();
             if (HiveSessionProperties.isOrcOptimizedWriterValidate(session)) {
@@ -188,7 +188,7 @@ public class OrcFileWriterFactory
             };
 
             return Optional.of(new OrcFileWriter(
-                    orcDataSink,
+                    dataSink,
                     rollbackAction,
                     orcEncoding,
                     fileColumnNames,
@@ -218,10 +218,10 @@ public class OrcFileWriterFactory
     /**
      * Allow subclass to replace data sink implementation.
      */
-    protected OrcDataSink createOrcDataSink(ConnectorSession session, FileSystem fileSystem, Path path)
+    protected DataSink createDataSink(ConnectorSession session, FileSystem fileSystem, Path path)
             throws IOException
     {
-        return new OutputStreamOrcDataSink(fileSystem.create(path));
+        return new OutputStreamDataSink(fileSystem.create(path));
     }
 
     private static CompressionKind getCompression(Properties schema, JobConf configuration, OrcEncoding orcEncoding)

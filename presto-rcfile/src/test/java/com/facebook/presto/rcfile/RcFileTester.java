@@ -482,7 +482,7 @@ public class RcFileTester
 
                     List<Object> data = new ArrayList<>(block.getPositionCount());
                     for (int position = 0; position < block.getPositionCount(); position++) {
-                        data.add(type.getObjectValue(SESSION, block, position));
+                        data.add(type.getObjectValue(SESSION.getSqlFunctionProperties(), block, position));
                     }
 
                     for (int i = 0; i < batchSize; i++) {
@@ -861,7 +861,7 @@ public class RcFileTester
         }
         else if (actualValue instanceof TimestampWritable) {
             TimestampWritable timestamp = (TimestampWritable) actualValue;
-            if (SESSION.isLegacyTimestamp()) {
+            if (SESSION.getSqlFunctionProperties().isLegacyTimestamp()) {
                 actualValue = new SqlTimestamp((timestamp.getSeconds() * 1000) + (timestamp.getNanos() / 1000000L), UTC_KEY);
             }
             else {

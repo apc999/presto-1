@@ -28,6 +28,7 @@ import com.facebook.presto.spi.block.SingleRowBlock;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionMetadata;
 import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.spi.function.SqlFunctionProperties;
 import com.facebook.presto.spi.function.SqlInvokedScalarFunctionImplementation;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.FunctionType;
@@ -147,6 +148,7 @@ import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 
 @Deprecated
 public class ExpressionInterpreter
@@ -528,7 +530,7 @@ public class ExpressionInterpreter
                         }
                         return Stream.of(expression);
                     })
-                    .collect(Collectors.toList());
+                    .collect(toList());
 
             if ((!values.isEmpty() && !(values.get(0) instanceof Expression)) || values.size() == 1) {
                 return values.get(0);
@@ -683,8 +685,8 @@ public class ExpressionInterpreter
                     FunctionHandle operatorHandle = metadata.getFunctionManager().resolveOperator(OperatorType.NEGATION, fromTypes(types(node.getValue())));
                     MethodHandle handle = metadata.getFunctionManager().getBuiltInScalarFunctionImplementation(operatorHandle).getMethodHandle();
 
-                    if (handle.type().parameterCount() > 0 && handle.type().parameterType(0) == ConnectorSession.class) {
-                        handle = handle.bindTo(connectorSession);
+                    if (handle.type().parameterCount() > 0 && handle.type().parameterType(0) == SqlFunctionProperties.class) {
+                        handle = handle.bindTo(connectorSession.getSqlFunctionProperties());
                     }
                     try {
                         return handle.invokeWithArguments(value);
@@ -803,8 +805,8 @@ public class ExpressionInterpreter
                     OperatorType.EQUAL,
                     ImmutableList.of(commonType, commonType),
                     ImmutableList.of(
-                            functionInvoker.invoke(firstCast, connectorSession, ImmutableList.of(first)),
-                            functionInvoker.invoke(secondCast, connectorSession, ImmutableList.of(second)))));
+                            functionInvoker.invoke(firstCast, session.getSqlFunctionProperties(), ImmutableList.of(first)),
+                            functionInvoker.invoke(secondCast, session.getSqlFunctionProperties(), ImmutableList.of(second)))));
 
             if (equal) {
                 return null;
@@ -918,7 +920,7 @@ public class ExpressionInterpreter
 
             switch (functionMetadata.getImplementationType()) {
                 case BUILTIN:
-                    result = functionInvoker.invoke(functionHandle, connectorSession, argumentValues);
+                    result = functionInvoker.invoke(functionHandle, session.getSqlFunctionProperties(), argumentValues);
                     break;
                 case SQL:
                     Expression function = getSqlFunctionExpression(functionMetadata, (SqlInvokedScalarFunctionImplementation) metadata.getFunctionManager().getScalarFunctionImplementation(functionHandle), session.getSqlFunctionProperties(), node.getArguments());
@@ -972,7 +974,7 @@ public class ExpressionInterpreter
         {
             List<Object> values = node.getValues().stream()
                     .map(value -> process(value, context))
-                    .collect(toImmutableList());
+                    .collect(toList());
             Object function = process(node.getFunction(), context);
 
             if (hasUnresolvedValue(values) || hasUnresolvedValue(function)) {
@@ -1120,7 +1122,7 @@ public class ExpressionInterpreter
             FunctionHandle operator = metadata.getFunctionManager().lookupCast(CAST, sourceType.getTypeSignature(), targetType.getTypeSignature());
 
             try {
-                Object castedValue = functionInvoker.invoke(operator, connectorSession, ImmutableList.of(value));
+                Object castedValue = functionInvoker.invoke(operator, session.getSqlFunctionProperties(), ImmutableList.of(value));
                 if (optimize && !isSerializable(castedValue, type(node))) {
                     return new Cast(toExpression(value, sourceType), node.getType(), node.isSafe(), node.isTypeOnly());
                 }
@@ -1263,7 +1265,7 @@ public class ExpressionInterpreter
         private Object invokeOperator(OperatorType operatorType, List<? extends Type> argumentTypes, List<Object> argumentValues)
         {
             FunctionHandle operatorHandle = metadata.getFunctionManager().resolveOperator(operatorType, fromTypes(argumentTypes));
-            return functionInvoker.invoke(operatorHandle, connectorSession, argumentValues);
+            return functionInvoker.invoke(operatorHandle, session.getSqlFunctionProperties(), argumentValues);
         }
 
         private Expression toExpression(Object base, Type type)

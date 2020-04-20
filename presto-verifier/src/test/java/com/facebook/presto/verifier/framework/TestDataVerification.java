@@ -16,7 +16,6 @@ package com.facebook.presto.verifier.framework;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.parser.SqlParserOptions;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.tests.StandaloneQueryRunner;
 import com.facebook.presto.verifier.checksum.ChecksumValidator;
 import com.facebook.presto.verifier.event.DeterminismAnalysisRun;
@@ -32,10 +31,10 @@ import com.facebook.presto.verifier.resolver.ExceededTimeLimitFailureResolver;
 import com.facebook.presto.verifier.resolver.FailureResolverManager;
 import com.facebook.presto.verifier.resolver.VerifierLimitationFailureResolver;
 import com.facebook.presto.verifier.retry.RetryConfig;
+import com.facebook.presto.verifier.rewrite.QueryRewriteConfig;
 import com.facebook.presto.verifier.rewrite.QueryRewriter;
+import com.facebook.presto.verifier.rewrite.VerificationQueryRewriterFactory;
 import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -56,8 +55,6 @@ import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.FAILED_RESOLVED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SKIPPED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SUCCEEDED;
-import static com.facebook.presto.verifier.framework.ClusterType.CONTROL;
-import static com.facebook.presto.verifier.framework.ClusterType.TEST;
 import static com.facebook.presto.verifier.framework.DeterminismAnalysis.DETERMINISTIC;
 import static com.facebook.presto.verifier.framework.DeterminismAnalysis.NON_DETERMINISTIC_COLUMNS;
 import static com.facebook.presto.verifier.framework.SkippedReason.CONTROL_SETUP_QUERY_FAILED;
@@ -89,19 +86,24 @@ public class TestDataVerification
         queryRunner = setupPresto();
     }
 
-    private DataVerification createVerification(String controlQuery, String testQuery)
+    private Optional<VerifierQueryEvent> runVerification(String controlQuery, String testQuery)
     {
-        return createVerification(controlQuery, testQuery, new DeterminismAnalyzerConfig());
+        return runVerification(controlQuery, testQuery, new DeterminismAnalyzerConfig());
     }
 
-    private DataVerification createVerification(String controlQuery, String testQuery, DeterminismAnalyzerConfig determinismAnalyzerConfig)
+    private Optional<VerifierQueryEvent> runVerification(String controlQuery, String testQuery, DeterminismAnalyzerConfig determinismAnalyzerConfig)
+    {
+        return runVerification(controlQuery, testQuery, Optional.empty(), determinismAnalyzerConfig);
+    }
+
+    private Optional<VerifierQueryEvent> runVerification(String controlQuery, String testQuery, Optional<PrestoAction> mockPrestoAction, DeterminismAnalyzerConfig determinismAnalyzerConfig)
     {
         QueryConfiguration configuration = new QueryConfiguration(CATALOG, SCHEMA, Optional.of("user"), Optional.empty(), Optional.empty());
-        VerificationContext verificationContext = new VerificationContext();
+        VerificationContext verificationContext = VerificationContext.create();
         VerifierConfig verifierConfig = new VerifierConfig().setTestId(TEST_ID);
         RetryConfig retryConfig = new RetryConfig();
         TypeManager typeManager = createTypeManager();
-        PrestoAction prestoAction = new JdbcPrestoAction(
+        PrestoAction prestoAction = mockPrestoAction.orElseGet(() -> new JdbcPrestoAction(
                 PrestoExceptionClassifier.createDefault(),
                 configuration,
                 verificationContext,
@@ -109,17 +111,15 @@ public class TestDataVerification
                         .setHost(queryRunner.getServer().getAddress().getHost())
                         .setJdbcPort(queryRunner.getServer().getAddress().getPort()),
                 retryConfig,
-                retryConfig);
-        QueryRewriter queryRewriter = new QueryRewriter(
+                retryConfig));
+        QueryRewriter queryRewriter = new VerificationQueryRewriterFactory(
                 new SqlParser(new SqlParserOptions().allowIdentifierSymbol(COLON, AT_SIGN)),
                 typeManager,
-                prestoAction,
-                ImmutableList.of(),
-                ImmutableMap.of(CONTROL, QualifiedName.of("tmp_verifier_c"), TEST, QualifiedName.of("tmp_verifier_t")));
+                new QueryRewriteConfig().setTablePrefix("tmp_verifier_c"),
+                new QueryRewriteConfig().setTablePrefix("tmp_verifier_t")).create(prestoAction);
         ChecksumValidator checksumValidator = createChecksumValidator(verifierConfig);
         SourceQuery sourceQuery = new SourceQuery(SUITE, NAME, controlQuery, testQuery, configuration, configuration);
         return new DataVerification(
-                (verification, e) -> false,
                 prestoAction,
                 sourceQuery,
                 queryRewriter,
@@ -139,13 +139,13 @@ public class TestDataVerification
                 verificationContext,
                 verifierConfig,
                 typeManager,
-                checksumValidator);
+                checksumValidator).run().getEvent();
     }
 
     @Test
     public void testSuccess()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT 1.0", "SELECT 1.00001").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT 1.0", "SELECT 1.00001");
         assertTrue(event.isPresent());
         assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
     }
@@ -153,7 +153,7 @@ public class TestDataVerification
     @Test
     public void testSchemaMismatch()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT 1", "SELECT 1.00001").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT 1", "SELECT 1.00001");
         assertTrue(event.isPresent());
         assertEvent(
                 event.get(),
@@ -167,9 +167,9 @@ public class TestDataVerification
     @Test
     public void testRowCountMismatch()
     {
-        Optional<VerifierQueryEvent> event = createVerification(
+        Optional<VerifierQueryEvent> event = runVerification(
                 "SELECT 1 x",
-                "SELECT 1 x UNION ALL SELECT 1 x").run();
+                "SELECT 1 x UNION ALL SELECT 1 x");
         assertTrue(event.isPresent());
         assertEvent(
                 event.get(),
@@ -184,7 +184,7 @@ public class TestDataVerification
     @Test
     public void testColumnMismatch()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT 1.0", "SELECT 1.001").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT 1.0", "SELECT 1.001");
         assertTrue(event.isPresent());
         assertEvent(
                 event.get(),
@@ -201,14 +201,20 @@ public class TestDataVerification
     @Test
     public void testParsingFailed()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT", "SELECT 1").run();
-        assertFalse(event.isPresent());
+        Optional<VerifierQueryEvent> event = runVerification("SELECT", "SELECT 1");
+        assertTrue(event.isPresent());
+        assertEvent(
+                event.get(),
+                SKIPPED,
+                Optional.empty(),
+                Optional.of("VERIFIER_INTERNAL_ERROR"),
+                Optional.of("Test state NOT_RUN, Control state NOT_RUN\\..*"));
     }
 
     @Test
     public void testRewriteFailed()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT * FROM test", "SELECT 1").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT * FROM test", "SELECT 1");
         assertTrue(event.isPresent());
         assertEquals(event.get().getSkippedReason(), FAILED_BEFORE_CONTROL_QUERY.name());
         assertEvent(
@@ -223,7 +229,7 @@ public class TestDataVerification
     @Test
     public void testControlFailed()
     {
-        Optional<VerifierQueryEvent> event = createVerification("INSERT INTO dest SELECT * FROM test", "SELECT 1").run();
+        Optional<VerifierQueryEvent> event = runVerification("INSERT INTO dest SELECT * FROM test", "SELECT 1");
         assertTrue(event.isPresent());
         assertEquals(event.get().getSkippedReason(), CONTROL_SETUP_QUERY_FAILED.name());
         assertEvent(
@@ -238,7 +244,7 @@ public class TestDataVerification
     @Test
     public void testNonDeterministic()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT rand()", "SELECT 2.0").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT rand()", "SELECT 2.0");
         assertTrue(event.isPresent());
         assertEquals(event.get().getSkippedReason(), NON_DETERMINISTIC.name());
         assertEvent(
@@ -260,13 +266,13 @@ public class TestDataVerification
     @Test
     public void testArrayOfRow()
     {
-        Optional<VerifierQueryEvent> event = createVerification(
+        Optional<VerifierQueryEvent> event = runVerification(
                 "SELECT ARRAY[ROW(1, 'a'), ROW(2, null)]", "SELECT ARRAY[ROW(1, 'a'), ROW(2, null)]",
-                new DeterminismAnalyzerConfig().setMaxAnalysisRuns(3)).run();
+                new DeterminismAnalyzerConfig().setMaxAnalysisRuns(3));
         assertTrue(event.isPresent());
         assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
 
-        event = createVerification("SELECT ARRAY[ROW(1, 'a'), ROW(2, 'b')]", "SELECT ARRAY[ROW(1, 'a'), ROW(2, null)]").run();
+        event = runVerification("SELECT ARRAY[ROW(1, 'a'), ROW(2, 'b')]", "SELECT ARRAY[ROW(1, 'a'), ROW(2, null)]");
         assertTrue(event.isPresent());
         assertEvent(
                 event.get(),
@@ -290,7 +296,25 @@ public class TestDataVerification
     @Test
     public void testSelectDate()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT date '2020-01-01', date(now()) today", "SELECT date '2020-01-01', date(now()) today").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT date '2020-01-01', date(now()) today", "SELECT date '2020-01-01', date(now()) today");
+        assertTrue(event.isPresent());
+        assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    @Test
+    public void testSelectTime()
+    {
+        String query = "SELECT time '12:34:56'";
+        Optional<VerifierQueryEvent> event = runVerification(query, query);
+        assertTrue(event.isPresent());
+        assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    @Test
+    public void testSelectTimestampWithTimeZone()
+    {
+        String query = "SELECT cast(timestamp '2020-04-01 12:34:56' AS timestamp with time zone)";
+        Optional<VerifierQueryEvent> event = runVerification(query, query);
         assertTrue(event.isPresent());
         assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
     }
@@ -298,7 +322,16 @@ public class TestDataVerification
     @Test
     public void testSelectUnknown()
     {
-        Optional<VerifierQueryEvent> event = createVerification("SELECT null, null unknown", "SELECT null, null unknown").run();
+        Optional<VerifierQueryEvent> event = runVerification("SELECT null, null unknown", "SELECT null, null unknown");
+        assertTrue(event.isPresent());
+        assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
+    }
+
+    @Test
+    public void testSelectDecimal()
+    {
+        String query = "SELECT decimal '1.2'";
+        Optional<VerifierQueryEvent> event = runVerification(query, query);
         assertTrue(event.isPresent());
         assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
     }
@@ -315,7 +348,7 @@ public class TestDataVerification
                 "        ]\n" +
                 "    ),\n" +
                 "    ROW(NULL)";
-        Optional<VerifierQueryEvent> event = createVerification(query, query).run();
+        Optional<VerifierQueryEvent> event = runVerification(query, query);
         assertTrue(event.isPresent());
         assertEvent(event.get(), SUCCEEDED, Optional.empty(), Optional.empty(), Optional.empty());
     }
@@ -327,7 +360,7 @@ public class TestDataVerification
         queryRunner.execute(format("CREATE TABLE checksum_test (%s)", columns.stream().map(column -> column + " double").collect(joining(","))));
 
         String query = format("SELECT %s FROM checksum_test", Joiner.on(",").join(columns));
-        Optional<VerifierQueryEvent> event = createVerification(query, query).run();
+        Optional<VerifierQueryEvent> event = runVerification(query, query);
 
         assertTrue(event.isPresent());
         assertEquals(event.get().getStatus(), FAILED_RESOLVED.name());

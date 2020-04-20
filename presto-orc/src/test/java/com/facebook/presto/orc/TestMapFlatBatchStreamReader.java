@@ -53,8 +53,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
-import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
-import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.orc.NoopOrcAggregatedMemoryContext.NOOP_ORC_AGGREGATED_MEMORY_CONTEXT;
 import static com.facebook.presto.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
 import static com.facebook.presto.orc.TestMapFlatBatchStreamReader.ExpectedValuesBuilder.Frequency.ALL;
 import static com.facebook.presto.orc.TestMapFlatBatchStreamReader.ExpectedValuesBuilder.Frequency.NONE;
@@ -399,8 +398,9 @@ public class TestMapFlatBatchStreamReader
                 OrcEncoding.DWRF,
                 new StorageOrcFileTailSource(),
                 new StorageStripeMetadataSource(),
+                NOOP_ORC_AGGREGATED_MEMORY_CONTEXT,
                 OrcReaderTestingUtils.createDefaultTestConfig(),
-                DEFAULT_HIVE_FILE_CONTEXT);
+                false);
         Type mapType = TYPE_MANAGER.getParameterizedType(
                 StandardTypes.MAP,
                 ImmutableList.of(
@@ -411,7 +411,7 @@ public class TestMapFlatBatchStreamReader
                 ImmutableMap.of(0, mapType),
                 createOrcPredicate(0, mapType, expectedValues, OrcTester.Format.DWRF, true),
                 HIVE_STORAGE_TIME_ZONE,
-                newSimpleAggregatedMemoryContext(),
+                new TestingHiveOrcAggregatedMemoryContext(),
                 1024)) {
             Iterator<?> expectedValuesIterator = expectedValues.iterator();
 
@@ -429,7 +429,7 @@ public class TestMapFlatBatchStreamReader
                     Block block = recordReader.readBlock(0);
 
                     for (int position = 0; position < block.getPositionCount(); position++) {
-                        assertEquals(mapType.getObjectValue(SESSION, block, position), expectedValuesIterator.next());
+                        assertEquals(mapType.getObjectValue(SESSION.getSqlFunctionProperties(), block, position), expectedValuesIterator.next());
                     }
                 }
 

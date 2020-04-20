@@ -27,8 +27,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.hive.metastore.SortingColumn.Order.ASCENDING;
-import static com.facebook.presto.hive.metastore.SortingColumn.Order.DESCENDING;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
 import static com.facebook.presto.spi.session.PropertyMetadata.doubleProperty;
 import static com.facebook.presto.spi.session.PropertyMetadata.integerProperty;
@@ -50,6 +48,7 @@ public class HiveTableProperties
     public static final String ORC_BLOOM_FILTER_COLUMNS = "orc_bloom_filter_columns";
     public static final String ORC_BLOOM_FILTER_FPP = "orc_bloom_filter_fpp";
     public static final String AVRO_SCHEMA_URL = "avro_schema_url";
+    public static final String PREFERRED_ORDERING_COLUMNS = "preferred_ordering_columns";
 
     private final List<PropertyMetadata<?>> tableProperties;
 
@@ -102,11 +101,11 @@ public class HiveTableProperties
                         false,
                         value -> ((Collection<?>) value).stream()
                                 .map(String.class::cast)
-                                .map(HiveTableProperties::sortingColumnFromString)
+                                .map(SortingColumn::sortingColumnFromString)
                                 .collect(toImmutableList()),
                         value -> ((Collection<?>) value).stream()
                                 .map(SortingColumn.class::cast)
-                                .map(HiveTableProperties::sortingColumnToString)
+                                .map(SortingColumn::sortingColumnToString)
                                 .collect(toImmutableList())),
                 new PropertyMetadata<>(
                         ORC_BLOOM_FILTER_COLUMNS,
@@ -126,7 +125,22 @@ public class HiveTableProperties
                         config.getOrcDefaultBloomFilterFpp(),
                         false),
                 integerProperty(BUCKET_COUNT_PROPERTY, "Number of buckets", 0, false),
-                stringProperty(AVRO_SCHEMA_URL, "URI pointing to Avro schema for the table", null, false));
+                stringProperty(AVRO_SCHEMA_URL, "URI pointing to Avro schema for the table", null, false),
+                new PropertyMetadata<>(
+                        PREFERRED_ORDERING_COLUMNS,
+                        "Preferred ordering columns for unbucketed table",
+                        typeManager.getType(parseTypeSignature("array(varchar)")),
+                        List.class,
+                        ImmutableList.of(),
+                        false,
+                        value -> ((Collection<?>) value).stream()
+                                .map(String.class::cast)
+                                .map(SortingColumn::sortingColumnFromString)
+                                .collect(toImmutableList()),
+                        value -> ((Collection<?>) value).stream()
+                                .map(SortingColumn.class::cast)
+                                .map(SortingColumn::sortingColumnToString)
+                                .collect(toImmutableList())));
     }
 
     public List<PropertyMetadata<?>> getTableProperties()
@@ -202,22 +216,16 @@ public class HiveTableProperties
         return (Double) tableProperties.get(ORC_BLOOM_FILTER_FPP);
     }
 
-    private static SortingColumn sortingColumnFromString(String name)
+    @SuppressWarnings("unchecked")
+    public static List<SortingColumn> getPreferredOrderingColumns(Map<String, Object> tableProperties)
     {
-        SortingColumn.Order order = ASCENDING;
-        String lower = name.toUpperCase(ENGLISH);
-        if (lower.endsWith(" ASC")) {
-            name = name.substring(0, name.length() - 4).trim();
+        List<SortingColumn> preferredOrderingColumns = (List<SortingColumn>) tableProperties.get(PREFERRED_ORDERING_COLUMNS);
+        if (preferredOrderingColumns == null) {
+            return ImmutableList.of();
         }
-        else if (lower.endsWith(" DESC")) {
-            name = name.substring(0, name.length() - 5).trim();
-            order = DESCENDING;
+        if (!preferredOrderingColumns.isEmpty() && getBucketProperty(tableProperties).isPresent()) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, format("%s must not be specified when %s is specified", PREFERRED_ORDERING_COLUMNS, BUCKETED_BY_PROPERTY));
         }
-        return new SortingColumn(name, order);
-    }
-
-    private static String sortingColumnToString(SortingColumn column)
-    {
-        return column.getColumnName() + ((column.getOrder() == DESCENDING) ? " DESC" : "");
+        return preferredOrderingColumns;
     }
 }

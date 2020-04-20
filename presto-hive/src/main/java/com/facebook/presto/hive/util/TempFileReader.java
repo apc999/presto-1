@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive.util;
 
+import com.facebook.presto.hive.HiveOrcAggregatedMemoryContext;
 import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcPredicate;
@@ -34,8 +35,6 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_DATA_ERROR;
-import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
-import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
 import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -59,12 +58,13 @@ public class TempFileReader
                     ORC,
                     new StorageOrcFileTailSource(),
                     new StorageStripeMetadataSource(),
+                    new HiveOrcAggregatedMemoryContext(),
                     new OrcReaderOptions(
                             new DataSize(1, MEGABYTE),
                             new DataSize(8, MEGABYTE),
                             new DataSize(16, MEGABYTE),
                             false),
-                    DEFAULT_HIVE_FILE_CONTEXT);
+                    false);
 
             Map<Integer, Type> includedColumns = new HashMap<>();
             for (int i = 0; i < types.size(); i++) {
@@ -75,7 +75,7 @@ public class TempFileReader
                     includedColumns,
                     OrcPredicate.TRUE,
                     UTC,
-                    newSimpleAggregatedMemoryContext(),
+                    new HiveOrcAggregatedMemoryContext(),
                     INITIAL_BATCH_SIZE);
         }
         catch (IOException e) {

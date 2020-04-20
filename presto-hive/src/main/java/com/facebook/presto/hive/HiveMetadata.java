@@ -102,6 +102,7 @@ import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import io.airlift.slice.Slice;
@@ -153,6 +154,7 @@ import static com.facebook.presto.hive.HiveColumnHandle.updateRowIdHandle;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_COLUMN_ORDER_MISMATCH;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CONCURRENT_MODIFICATION_DETECTED;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_READ_ONLY;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_TIMEZONE_MISMATCH;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNKNOWN_ERROR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
@@ -179,6 +181,7 @@ import static com.facebook.presto.hive.HiveTableProperties.EXTERNAL_LOCATION_PRO
 import static com.facebook.presto.hive.HiveTableProperties.ORC_BLOOM_FILTER_COLUMNS;
 import static com.facebook.presto.hive.HiveTableProperties.ORC_BLOOM_FILTER_FPP;
 import static com.facebook.presto.hive.HiveTableProperties.PARTITIONED_BY_PROPERTY;
+import static com.facebook.presto.hive.HiveTableProperties.PREFERRED_ORDERING_COLUMNS;
 import static com.facebook.presto.hive.HiveTableProperties.SORTED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.STORAGE_FORMAT_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.getAvroSchemaUrl;
@@ -188,6 +191,7 @@ import static com.facebook.presto.hive.HiveTableProperties.getHiveStorageFormat;
 import static com.facebook.presto.hive.HiveTableProperties.getOrcBloomFilterColumns;
 import static com.facebook.presto.hive.HiveTableProperties.getOrcBloomFilterFpp;
 import static com.facebook.presto.hive.HiveTableProperties.getPartitionedBy;
+import static com.facebook.presto.hive.HiveTableProperties.getPreferredOrderingColumns;
 import static com.facebook.presto.hive.HiveType.toHiveType;
 import static com.facebook.presto.hive.HiveUtil.columnExtraInfo;
 import static com.facebook.presto.hive.HiveUtil.decodeViewData;
@@ -275,6 +279,10 @@ public class HiveMetadata
             Optional.empty(),
             emptyList());
 
+    // Comma is not a reserved keyword with or without quote
+    // See https://cwiki.apache.org/confluence/display/Hive/LanguageManual+DDL#LanguageManualDDL-Keywords,Non-reservedKeywordsandReservedKeywords
+    private static final char COMMA = ',';
+
     // 1009 is chosen as a prime number greater than 1000.
     // This is because Hive bucket function can result in skewed distribution when bucket number of power of 2
     // TODO: Use a regular number once better hash function is used for table write shuffle partitioning.
@@ -295,6 +303,7 @@ public class HiveMetadata
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
     private final boolean writesToNonManagedTablesEnabled;
     private final boolean createsOfNonManagedTablesEnabled;
+    private final int maxPartitionBatchSize;
     private final TypeTranslator typeTranslator;
     private final String prestoVersion;
     private final HiveStatisticsProvider hiveStatisticsProvider;
@@ -310,6 +319,7 @@ public class HiveMetadata
             boolean allowCorruptWritesForTesting,
             boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled,
+            int maxPartitionBatchSize,
             TypeManager typeManager,
             LocationService locationService,
             StandardFunctionResolution functionResolution,
@@ -341,6 +351,7 @@ public class HiveMetadata
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
         this.createsOfNonManagedTablesEnabled = createsOfNonManagedTablesEnabled;
+        this.maxPartitionBatchSize = maxPartitionBatchSize;
         this.typeTranslator = requireNonNull(typeTranslator, "typeTranslator is null");
         this.prestoVersion = requireNonNull(prestoVersion, "prestoVersion is null");
         this.hiveStatisticsProvider = requireNonNull(hiveStatisticsProvider, "hiveStatisticsProvider is null");
@@ -538,10 +549,19 @@ public class HiveMetadata
             properties.put(SORTED_BY_PROPERTY, bucketProperty.get().getSortedBy());
         }
 
+        // Preferred ordering columns
+        List<SortingColumn> preferredOrderingColumns = decodePreferredOrderingColumnsFromStorage(table.get().getStorage());
+        if (!preferredOrderingColumns.isEmpty()) {
+            if (bucketProperty.isPresent()) {
+                throw new PrestoException(HIVE_INVALID_METADATA, format("bucketed table %s should not specify preferred_ordering_columns", tableName));
+            }
+            properties.put(PREFERRED_ORDERING_COLUMNS, preferredOrderingColumns);
+        }
+
         // ORC format specific properties
         String orcBloomFilterColumns = table.get().getParameters().get(ORC_BLOOM_FILTER_COLUMNS_KEY);
         if (orcBloomFilterColumns != null) {
-            properties.put(ORC_BLOOM_FILTER_COLUMNS, Splitter.on(',').trimResults().omitEmptyStrings().splitToList(orcBloomFilterColumns));
+            properties.put(ORC_BLOOM_FILTER_COLUMNS, Splitter.on(COMMA).trimResults().omitEmptyStrings().splitToList(orcBloomFilterColumns));
         }
         String orcBloomFilterFfp = table.get().getParameters().get(ORC_BLOOM_FILTER_FPP_KEY);
         if (orcBloomFilterFfp != null) {
@@ -708,6 +728,17 @@ public class HiveMetadata
         return ((HiveColumnHandle) columnHandle).getColumnMetadata(typeManager);
     }
 
+    /**
+     * Returns a TupleDomain of constraints that is suitable for Explain (Type IO)
+     *
+     * Only Hive partition columns that are used in IO planning.
+     */
+    @Override
+    public TupleDomain<ColumnHandle> toExplainIOConstraints(ConnectorSession session, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> constraints)
+    {
+        return constraints.transform(columnHandle -> ((HiveColumnHandle) columnHandle).isPartitionKey() ? columnHandle : null);
+    }
+
     @Override
     public void createSchema(ConnectorSession session, String schemaName, Map<String, Object> properties)
     {
@@ -763,6 +794,7 @@ public class HiveMetadata
 
         List<HiveColumnHandle> columnHandles = getColumnHandles(tableMetadata, ImmutableSet.copyOf(partitionedBy), typeTranslator);
         HiveStorageFormat hiveStorageFormat = getHiveStorageFormat(tableMetadata.getProperties());
+        List<SortingColumn> preferredOrderingColumns = getPreferredOrderingColumns(tableMetadata.getProperties());
         Map<String, String> tableProperties = getEmptyTableProperties(tableMetadata, !partitionedBy.isEmpty(), new HdfsContext(session, schemaName, tableName));
 
         validateColumns(hiveStorageFormat, columnHandles);
@@ -800,6 +832,7 @@ public class HiveMetadata
                 hiveStorageFormat,
                 partitionedBy,
                 bucketProperty,
+                preferredOrderingColumns,
                 tableProperties,
                 targetPath,
                 tableType,
@@ -921,7 +954,7 @@ public class HiveMetadata
         // ORC format specific properties
         List<String> columns = getOrcBloomFilterColumns(tableMetadata.getProperties());
         if (columns != null && !columns.isEmpty()) {
-            tableProperties.put(ORC_BLOOM_FILTER_COLUMNS_KEY, Joiner.on(",").join(columns));
+            tableProperties.put(ORC_BLOOM_FILTER_COLUMNS_KEY, Joiner.on(COMMA).join(columns));
             tableProperties.put(ORC_BLOOM_FILTER_FPP_KEY, String.valueOf(getOrcBloomFilterFpp(tableMetadata.getProperties())));
         }
 
@@ -1000,6 +1033,7 @@ public class HiveMetadata
             HiveStorageFormat hiveStorageFormat,
             List<String> partitionedBy,
             Optional<HiveBucketProperty> bucketProperty,
+            List<SortingColumn> preferredOrderingColumns,
             Map<String, String> additionalTableParameters,
             Path targetPath,
             PrestoTableType tableType,
@@ -1047,6 +1081,7 @@ public class HiveMetadata
         tableBuilder.getStorageBuilder()
                 .setStorageFormat(fromHiveStorageFormat(hiveStorageFormat))
                 .setBucketProperty(bucketProperty)
+                .setParameters(ImmutableMap.of(PREFERRED_ORDERING_COLUMNS, encodePreferredOrderingColumns(preferredOrderingColumns)))
                 .setLocation(targetPath.toString());
 
         return tableBuilder.build();
@@ -1216,6 +1251,7 @@ public class HiveMetadata
         HiveStorageFormat tableStorageFormat = getHiveStorageFormat(tableMetadata.getProperties());
         List<String> partitionedBy = getPartitionedBy(tableMetadata.getProperties());
         Optional<HiveBucketProperty> bucketProperty = getBucketProperty(tableMetadata.getProperties());
+        List<SortingColumn> preferredOrderingColumns = getPreferredOrderingColumns(tableMetadata.getProperties());
 
         // get the root directory for the database
         SchemaTableName schemaTableName = tableMetadata.getTable();
@@ -1250,6 +1286,7 @@ public class HiveMetadata
                 getCompressionCodec(session),
                 partitionedBy,
                 bucketProperty,
+                preferredOrderingColumns,
                 session.getUser(),
                 tableProperties);
 
@@ -1283,6 +1320,7 @@ public class HiveMetadata
                 handle.getTableStorageFormat(),
                 handle.getPartitionedBy(),
                 handle.getBucketProperty(),
+                handle.getPreferredOrderingColumns(),
                 handle.getAdditionalTableParameters(),
                 writeInfo.getTargetPath(),
                 MANAGED_TABLE,
@@ -1481,6 +1519,7 @@ public class HiveMetadata
         else {
             locationHandle = locationService.forExistingTable(metastore, session, table.get(), tempPathRequired);
         }
+
         HiveInsertTableHandle result = new HiveInsertTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),
@@ -1489,6 +1528,7 @@ public class HiveMetadata
                 metastore.generatePageSinkMetadata(tableName),
                 locationHandle,
                 table.get().getStorage().getBucketProperty(),
+                decodePreferredOrderingColumnsFromStorage(table.get().getStorage()),
                 tableStorageFormat,
                 isRespectTableFormat(session) ? tableStorageFormat : HiveSessionProperties.getHiveStorageFormat(session),
                 isTemporaryTable ? getTemporaryTableCompressionCodec(session) : getCompressionCodec(session));
@@ -1548,6 +1588,8 @@ public class HiveMetadata
                 .collect(toImmutableMap(HiveColumnHandle::getName, column -> column.getHiveType().getType(typeManager)));
         Map<List<String>, ComputedStatistics> partitionComputedStatistics = createComputedStatisticsToPartitionMap(computedStatistics, partitionedBy, columnTypes);
 
+        Set<String> existingPartitions = getExistingPartitionNames(handle.getSchemaName(), handle.getTableName(), partitionUpdates);
+
         for (PartitionUpdate partitionUpdate : partitionUpdates) {
             if (partitionUpdate.getName().isEmpty()) {
                 // insert into unpartitioned table
@@ -1587,8 +1629,13 @@ public class HiveMetadata
                 if (!partition.getStorage().getStorageFormat().getInputFormat().equals(handle.getPartitionStorageFormat().getInputFormat()) && isRespectTableFormat(session)) {
                     throw new PrestoException(HIVE_CONCURRENT_MODIFICATION_DETECTED, "Partition format changed during insert");
                 }
-                if (partitionUpdate.getUpdateMode() == OVERWRITE) {
-                    metastore.dropPartition(session, handle.getSchemaName(), handle.getTableName(), partition.getValues());
+                if (existingPartitions.contains(partitionUpdate.getName())) {
+                    if (partitionUpdate.getUpdateMode() == OVERWRITE) {
+                        metastore.dropPartition(session, handle.getSchemaName(), handle.getTableName(), partition.getValues());
+                    }
+                    else {
+                        throw new PrestoException(HIVE_PARTITION_READ_ONLY, "Cannot insert into an existing partition of Hive table: " + partitionUpdate.getName());
+                    }
                 }
                 PartitionStatistics partitionStatistics = createPartitionStatistics(
                         session,
@@ -1657,6 +1704,35 @@ public class HiveMetadata
         return Optional.ofNullable(partitionComputedStatistics.get(partitionValues))
                 .map(ComputedStatistics::getColumnStatistics)
                 .orElse(ImmutableMap.of());
+    }
+
+    private Set<String> getExistingPartitionNames(String databaseName, String tableName, List<PartitionUpdate> partitionUpdates)
+    {
+        ImmutableSet.Builder<String> existingPartitions = ImmutableSet.builder();
+        ImmutableSet.Builder<String> potentiallyNewPartitions = ImmutableSet.builder();
+
+        for (PartitionUpdate update : partitionUpdates) {
+            switch (update.getUpdateMode()) {
+                case APPEND:
+                    existingPartitions.add(update.getName());
+                    break;
+                case NEW:
+                case OVERWRITE:
+                    potentiallyNewPartitions.add(update.getName());
+                    break;
+                default:
+                    throw new IllegalArgumentException("unexpected update mode: " + update.getUpdateMode());
+            }
+        }
+
+        // try to load potentially new partitions in batches to check if any of them exist
+        Lists.partition(ImmutableList.copyOf(potentiallyNewPartitions.build()), maxPartitionBatchSize).stream()
+                .flatMap(partitionNames -> metastore.getPartitionsByNames(databaseName, tableName, partitionNames).entrySet().stream()
+                        .filter(entry -> entry.getValue().isPresent())
+                        .map(Map.Entry::getKey))
+                .forEach(existingPartitions::add);
+
+        return existingPartitions.build();
     }
 
     @Override
@@ -2516,6 +2592,26 @@ public class HiveMetadata
             }
         }
         throw new PrestoException(HIVE_UNSUPPORTED_FORMAT, format("Output format %s with SerDe %s is not supported", outputFormat, serde));
+    }
+
+    @VisibleForTesting
+    static String encodePreferredOrderingColumns(List<SortingColumn> preferredOrderingColumns)
+    {
+        return Joiner.on(COMMA).join(preferredOrderingColumns.stream()
+                .map(SortingColumn::sortingColumnToString)
+                .collect(toImmutableList()));
+    }
+
+    @VisibleForTesting
+    static List<SortingColumn> decodePreferredOrderingColumnsFromStorage(Storage storage)
+    {
+        if (!storage.getParameters().containsKey(PREFERRED_ORDERING_COLUMNS)) {
+            return ImmutableList.of();
+        }
+
+        return Splitter.on(COMMA).trimResults().omitEmptyStrings().splitToList(storage.getParameters().get(PREFERRED_ORDERING_COLUMNS)).stream()
+                .map(SortingColumn::sortingColumnFromString)
+                .collect(toImmutableList());
     }
 
     private static void validateBucketColumns(ConnectorTableMetadata tableMetadata)

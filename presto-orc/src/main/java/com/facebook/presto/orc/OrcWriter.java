@@ -28,7 +28,7 @@ import com.facebook.presto.orc.metadata.StripeFooter;
 import com.facebook.presto.orc.metadata.StripeInformation;
 import com.facebook.presto.orc.metadata.statistics.ColumnStatistics;
 import com.facebook.presto.orc.metadata.statistics.StripeStatistics;
-import com.facebook.presto.orc.stream.OrcDataOutput;
+import com.facebook.presto.orc.stream.DataOutput;
 import com.facebook.presto.orc.stream.StreamDataOutput;
 import com.facebook.presto.orc.writer.ColumnWriter;
 import com.facebook.presto.orc.writer.SliceDictionaryColumnWriter;
@@ -63,7 +63,7 @@ import static com.facebook.presto.orc.OrcWriterStats.FlushReason.MAX_BYTES;
 import static com.facebook.presto.orc.OrcWriterStats.FlushReason.MAX_ROWS;
 import static com.facebook.presto.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT;
 import static com.facebook.presto.orc.metadata.PostScript.MAGIC;
-import static com.facebook.presto.orc.stream.OrcDataOutput.createDataOutput;
+import static com.facebook.presto.orc.stream.DataOutput.createDataOutput;
 import static com.facebook.presto.orc.writer.ColumnWriters.createColumnWriter;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -91,7 +91,7 @@ public class OrcWriter
         PRESTO_ORC_WRITER_VERSION = version == null ? "UNKNOWN" : version;
     }
 
-    private final OrcDataSink orcDataSink;
+    private final DataSink dataSink;
     private final List<Type> types;
     private final OrcEncoding orcEncoding;
     private final CompressionKind compression;
@@ -122,7 +122,7 @@ public class OrcWriter
     private final OrcWriteValidation.OrcWriteValidationBuilder validationBuilder;
 
     public OrcWriter(
-            OrcDataSink orcDataSink,
+            DataSink dataSink,
             List<String> columnNames,
             List<Type> types,
             OrcEncoding orcEncoding,
@@ -136,7 +136,7 @@ public class OrcWriter
     {
         this.validationBuilder = validate ? new OrcWriteValidation.OrcWriteValidationBuilder(validationMode, types).setStringStatisticsLimitInBytes(toIntExact(options.getMaxStringStatisticsLimit().toBytes())) : null;
 
-        this.orcDataSink = requireNonNull(orcDataSink, "orcDataSink is null");
+        this.dataSink = requireNonNull(dataSink, "dataSink is null");
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.orcEncoding = requireNonNull(orcEncoding, "orcEncoding is null");
         this.compression = requireNonNull(compression, "compression is null");
@@ -207,7 +207,7 @@ public class OrcWriter
      */
     public long getWrittenBytes()
     {
-        return orcDataSink.size();
+        return dataSink.size();
     }
 
     /**
@@ -223,7 +223,7 @@ public class OrcWriter
         return INSTANCE_SIZE +
                 columnWritersRetainedBytes +
                 closedStripesRetainedBytes +
-                orcDataSink.getRetainedSizeInBytes() +
+                dataSink.getRetainedSizeInBytes() +
                 (validationBuilder == null ? 0 : validationBuilder.getRetainedSize());
     }
 
@@ -323,8 +323,8 @@ public class OrcWriter
     private void flushStripe(FlushReason flushReason)
             throws IOException
     {
-        List<OrcDataOutput> outputData = new ArrayList<>();
-        long stripeStartOffset = orcDataSink.size();
+        List<DataOutput> outputData = new ArrayList<>();
+        long stripeStartOffset = dataSink.size();
         // add header to first stripe (this is not required but nice to have)
         if (closedStripes.isEmpty()) {
             outputData.add(createDataOutput(MAGIC));
@@ -340,7 +340,7 @@ public class OrcWriter
             }
 
             // write all data
-            orcDataSink.write(outputData);
+            dataSink.write(outputData);
         }
         finally {
             // open next stripe
@@ -356,7 +356,7 @@ public class OrcWriter
      * Collect the data for for the stripe.  This is not the actual data, but
      * instead are functions that know how to write the data.
      */
-    private List<OrcDataOutput> bufferStripeData(long stripeStartOffset, FlushReason flushReason)
+    private List<DataOutput> bufferStripeData(long stripeStartOffset, FlushReason flushReason)
             throws IOException
     {
         if (stripeRowCount == 0) {
@@ -375,7 +375,7 @@ public class OrcWriter
 
         columnWriters.forEach(ColumnWriter::close);
 
-        List<OrcDataOutput> outputData = new ArrayList<>();
+        List<DataOutput> outputData = new ArrayList<>();
         List<Stream> allStreams = new ArrayList<>(columnWriters.size() * 3);
 
         // get index streams
@@ -449,17 +449,17 @@ public class OrcWriter
 
         flushStripe(CLOSED);
 
-        orcDataSink.close();
+        dataSink.close();
     }
 
     /**
      * Collect the data for for the file footer.  This is not the actual data, but
      * instead are functions that know how to write the data.
      */
-    private List<OrcDataOutput> bufferFileFooter()
+    private List<DataOutput> bufferFileFooter()
             throws IOException
     {
-        List<OrcDataOutput> outputData = new ArrayList<>();
+        List<DataOutput> outputData = new ArrayList<>();
 
         Metadata metadata = new Metadata(closedStripes.stream()
                 .map(ClosedStripe::getStatistics)

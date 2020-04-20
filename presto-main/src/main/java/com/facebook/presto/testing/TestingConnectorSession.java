@@ -82,6 +82,9 @@ public class TestingConnectorSession
         this.sqlFunctionProperties = SqlFunctionProperties.builder()
                 .setTimeZoneKey(requireNonNull(timeZoneKey, "timeZoneKey is null"))
                 .setLegacyTimestamp(isLegacyTimestamp)
+                .setSessionStartTime(startTime)
+                .setSessionLocale(locale)
+                .setSessionUser(user)
                 .build();
     }
 
@@ -101,12 +104,6 @@ public class TestingConnectorSession
     public ConnectorIdentity getIdentity()
     {
         return identity;
-    }
-
-    @Override
-    public TimeZoneKey getTimeZoneKey()
-    {
-        return sqlFunctionProperties.getTimeZoneKey();
     }
 
     @Override
@@ -134,15 +131,9 @@ public class TestingConnectorSession
     }
 
     @Override
-    public boolean isLegacyTimestamp()
-    {
-        return sqlFunctionProperties.isLegacyTimestamp();
-    }
-
-    @Override
     public SqlFunctionProperties getSqlFunctionProperties()
     {
-        return SqlFunctionProperties.builder().setTimeZoneKey(UTC_KEY).build();
+        return sqlFunctionProperties;
     }
 
     @Override

@@ -13,8 +13,6 @@
  */
 package com.facebook.presto.orc;
 
-import com.facebook.presto.hive.HiveFileContext;
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.orc.TupleDomainFilter.BigintMultiRange;
 import com.facebook.presto.orc.TupleDomainFilter.BigintRange;
 import com.facebook.presto.orc.TupleDomainFilter.BigintValuesUsingBitmask;
@@ -40,7 +38,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import com.google.common.io.Closer;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
@@ -169,13 +166,14 @@ public class OrcSelectiveRecordReader
             DataSize tinyStripeThreshold,
             DataSize maxBlockSize,
             Map<String, Slice> userMetadata,
-            AggregatedMemoryContext systemMemoryUsage,
+            OrcAggregatedMemoryContext systemMemoryUsage,
             Optional<OrcWriteValidation> writeValidation,
             int initialBatchSize,
             StripeMetadataSource stripeMetadataSource,
-            HiveFileContext hiveFileContext)
+            boolean cacheable)
     {
         super(includedColumns,
+                requiredSubfields,
                 createStreamReaders(
                         orcDataSource,
                         types,
@@ -187,7 +185,7 @@ public class OrcSelectiveRecordReader
                         filterFunctions,
                         filterFunctionInputMapping,
                         requiredSubfields,
-                        systemMemoryUsage.newAggregatedMemoryContext()),
+                        systemMemoryUsage.newOrcAggregatedMemoryContext()),
                 predicate,
                 numberOfRows,
                 fileStripes,
@@ -210,7 +208,7 @@ public class OrcSelectiveRecordReader
                 writeValidation,
                 initialBatchSize,
                 stripeMetadataSource,
-                hiveFileContext);
+                cacheable);
 
         // Hive column indices can't be used to index into arrays because they are negative
         // for partition and hidden columns. Hence, we create synthetic zero-based indices.
@@ -565,7 +563,7 @@ public class OrcSelectiveRecordReader
             List<FilterFunction> filterFunctions,
             Map<Integer, Integer> filterFunctionInputMapping,
             Map<Integer, List<Subfield>> requiredSubfields,
-            AggregatedMemoryContext systemMemoryContext)
+            OrcAggregatedMemoryContext systemMemoryContext)
     {
         List<StreamDescriptor> streamDescriptors = createStreamDescriptor("", "", 0, types, orcDataSource).getNestedStreams();
 
@@ -850,14 +848,6 @@ public class OrcSelectiveRecordReader
     public void close()
             throws IOException
     {
-        try (Closer closer = Closer.create()) {
-            for (SelectiveStreamReader streamReader : getStreamReaders()) {
-                if (streamReader != null) {
-                    closer.register(streamReader::close);
-                }
-            }
-        }
-
         super.close();
     }
 

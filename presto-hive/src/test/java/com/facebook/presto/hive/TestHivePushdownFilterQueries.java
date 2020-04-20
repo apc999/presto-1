@@ -76,7 +76,7 @@ public class TestHivePushdownFilterQueries
             "   CASE WHEN orderkey % 43 = 0 THEN null ELSE (CAST(discount AS DECIMAL(20, 8)), CAST(tax AS DECIMAL(20, 8))) END AS long_decimals, " +
             "   CASE WHEN orderkey % 11 = 0 THEN null ELSE (orderkey, partkey, suppkey) END AS keys, \n" +
             "   CASE WHEN orderkey % 41 = 0 THEN null ELSE (extendedprice, discount, tax) END AS doubles, \n" +
-            "   CASE WHEN orderkey % 13 = 0 THEN null ELSE ((orderkey, partkey), (suppkey,), CASE WHEN orderkey % 17 = 0 THEN null ELSE (orderkey, partkey) END) END AS nested_keys, \n" +
+            "   CASE WHEN orderkey % 13 = 0 THEN null ELSE ARRAY[ARRAY[orderkey, partkey], ARRAY[suppkey], CASE WHEN orderkey % 17 = 0 THEN null ELSE ARRAY[orderkey, partkey] END] END AS nested_keys, \n" +
             "   CASE WHEN orderkey % 17 = 0 THEN null ELSE (shipmode = 'AIR', returnflag = 'R') END as flags, \n" +
             "   CASE WHEN orderkey % 19 = 0 THEN null ELSE (CAST(discount AS REAL), CAST(tax AS REAL)) END as reals, \n" +
             "   CASE WHEN orderkey % 23 = 0 THEN null ELSE (orderkey, linenumber, (CAST(day(shipdate) as TINYINT), CAST(month(shipdate) AS TINYINT), CAST(year(shipdate) AS INTEGER))) END AS info, \n" +
@@ -762,6 +762,16 @@ public class TestHivePushdownFilterQueries
     }
 
     @Test
+    public void testNestedFilterFunctions()
+    {
+        // This query forces the shape aggregation, filter, project, filter, table scan. This ensures the outer filter is used in the query result.
+        assertQueryUsingH2Cte(
+                "select distinct shipmode from " +
+                        "(select * from lineitem_ex where orderkey % 5 = 0)" +
+                        "where ((case when (shipmode in ('RAIL', '2')) then '2' when (shipmode = 'AIR') then 'air' else 'Other' end) = '2')");
+    }
+
+    @Test
     public void testPushdownComposition()
     {
         // Tests composing two pushdowns each with a range filter and filter function.
@@ -875,6 +885,8 @@ public class TestHivePushdownFilterQueries
         Path newDirectoryPath = getOnlyPath("test_struct_add_column").getParent();
         Files.move(oldFilePath, Paths.get(newDirectoryPath.toString(), "old_file"), ATOMIC_MOVE);
         assertQuery("SELECT * FROM test_struct_add_column", "SELECT (1, 2, 3) UNION ALL SELECT (1, 2, null)");
+        assertQuery("SELECT x.a FROM test_struct_add_column", "SELECT 1 UNION ALL SELECT 1");
+        assertQuery("SELECT count(*) FROM test_struct_add_column where x.c = 1", "SELECT 0");
     }
 
     @Test

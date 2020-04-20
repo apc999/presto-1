@@ -13,8 +13,6 @@
  */
 package com.facebook.presto.orc;
 
-import com.facebook.presto.hive.HiveFileContext;
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.orc.checkpoint.InvalidCheckpointException;
 import com.facebook.presto.orc.checkpoint.StreamCheckpoint;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
@@ -37,6 +35,7 @@ import com.facebook.presto.orc.stream.OrcInputStream;
 import com.facebook.presto.orc.stream.ValueInputStream;
 import com.facebook.presto.orc.stream.ValueInputStreamSource;
 import com.facebook.presto.orc.stream.ValueStreams;
+import com.facebook.presto.spi.Subfield;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -50,6 +49,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
@@ -61,6 +61,7 @@ import static com.facebook.presto.orc.checkpoint.Checkpoints.getDictionaryStream
 import static com.facebook.presto.orc.checkpoint.Checkpoints.getStreamCheckpoints;
 import static com.facebook.presto.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY;
 import static com.facebook.presto.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY_V2;
+import static com.facebook.presto.orc.metadata.OrcType.OrcTypeKind.STRUCT;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.BLOOM_FILTER;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.BLOOM_FILTER_UTF8;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DICTIONARY_COUNT;
@@ -88,35 +89,36 @@ public class StripeReader
     private final MetadataReader metadataReader;
     private final Optional<OrcWriteValidation> writeValidation;
     private final StripeMetadataSource stripeMetadataSource;
-    private final HiveFileContext hiveFileContext;
+    private final boolean cacheable;
 
     public StripeReader(
             OrcDataSource orcDataSource,
             Optional<OrcDecompressor> decompressor,
             List<OrcType> types,
             Set<Integer> includedColumns,
+            Map<Integer, List<Subfield>> requiredSubfields,
             int rowsInRowGroup,
             OrcPredicate predicate,
             HiveWriterVersion hiveWriterVersion,
             MetadataReader metadataReader,
             Optional<OrcWriteValidation> writeValidation,
             StripeMetadataSource stripeMetadataSource,
-            HiveFileContext hiveFileContext)
+            boolean cacheable)
     {
         this.orcDataSource = requireNonNull(orcDataSource, "orcDataSource is null");
         this.decompressor = requireNonNull(decompressor, "decompressor is null");
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
-        this.includedOrcColumns = getIncludedOrcColumns(types, requireNonNull(includedColumns, "includedColumns is null"));
+        this.includedOrcColumns = getIncludedOrcColumns(types, requireNonNull(includedColumns, "includedColumns is null"), requireNonNull(requiredSubfields, "requiredSubfields is null"));
         this.rowsInRowGroup = rowsInRowGroup;
         this.predicate = requireNonNull(predicate, "predicate is null");
         this.hiveWriterVersion = requireNonNull(hiveWriterVersion, "hiveWriterVersion is null");
         this.metadataReader = requireNonNull(metadataReader, "metadataReader is null");
         this.writeValidation = requireNonNull(writeValidation, "writeValidation is null");
         this.stripeMetadataSource = requireNonNull(stripeMetadataSource, "stripeMetadataSource is null");
-        this.hiveFileContext = requireNonNull(hiveFileContext, "hiveFileContext is null");
+        this.cacheable = requireNonNull(cacheable, "hiveFileContext is null");
     }
 
-    public Stripe readStripe(StripeInformation stripe, AggregatedMemoryContext systemMemoryUsage)
+    public Stripe readStripe(StripeInformation stripe, OrcAggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
         StripeId stripeId = new StripeId(orcDataSource.getId(), stripe.getOffset());
@@ -257,7 +259,7 @@ public class StripeReader
         return new Stripe(stripe.getNumberOfRows(), columnEncodings, ImmutableList.of(rowGroup), dictionaryStreamSources);
     }
 
-    private Map<StreamId, OrcInputStream> readDiskRanges(StripeId stripeId, Map<StreamId, DiskRange> diskRanges, AggregatedMemoryContext systemMemoryUsage)
+    private Map<StreamId, OrcInputStream> readDiskRanges(StripeId stripeId, Map<StreamId, DiskRange> diskRanges, OrcAggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
         //
@@ -265,7 +267,7 @@ public class StripeReader
         //
 
         // read ranges
-        Map<StreamId, OrcDataSourceInput> streamsData = stripeMetadataSource.getInputs(orcDataSource, stripeId, diskRanges, hiveFileContext);
+        Map<StreamId, OrcDataSourceInput> streamsData = stripeMetadataSource.getInputs(orcDataSource, stripeId, diskRanges, cacheable);
 
         // transform streams to OrcInputStream
         ImmutableMap.Builder<StreamId, OrcInputStream> streamsBuilder = ImmutableMap.builder();
@@ -378,14 +380,14 @@ public class StripeReader
         return new RowGroup(groupId, rowOffset, rowCount, minAverageRowBytes, rowGroupStreams);
     }
 
-    public StripeFooter readStripeFooter(StripeId stripeId, StripeInformation stripe, AggregatedMemoryContext systemMemoryUsage)
+    public StripeFooter readStripeFooter(StripeId stripeId, StripeInformation stripe, OrcAggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
         long footerOffset = stripe.getOffset() + stripe.getIndexLength() + stripe.getDataLength();
         int footerLength = toIntExact(stripe.getFooterLength());
 
         // read the footer
-        Slice footerSlice = stripeMetadataSource.getStripeFooterSlice(orcDataSource, stripeId, footerOffset, footerLength, hiveFileContext);
+        Slice footerSlice = stripeMetadataSource.getStripeFooterSlice(orcDataSource, stripeId, footerOffset, footerLength, cacheable);
         try (InputStream inputStream = new OrcInputStream(orcDataSource.getId(), footerSlice.getInput(), decompressor, systemMemoryUsage, footerLength)) {
             return metadataReader.readStripeFooter(types, inputStream);
         }
@@ -458,14 +460,16 @@ public class StripeReader
     private static Map<Integer, ColumnStatistics> getRowGroupStatistics(OrcType rootStructType, Map<StreamId, List<RowGroupIndex>> columnIndexes, int rowGroup)
     {
         requireNonNull(rootStructType, "rootStructType is null");
-        checkArgument(rootStructType.getOrcTypeKind() == OrcTypeKind.STRUCT);
+        checkArgument(rootStructType.getOrcTypeKind() == STRUCT);
         requireNonNull(columnIndexes, "columnIndexes is null");
         checkArgument(rowGroup >= 0, "rowGroup is negative");
 
         Map<Integer, List<ColumnStatistics>> groupedColumnStatistics = new HashMap<>();
         for (Entry<StreamId, List<RowGroupIndex>> entry : columnIndexes.entrySet()) {
-            groupedColumnStatistics.computeIfAbsent(entry.getKey().getColumn(), key -> new ArrayList<>())
-                    .add(entry.getValue().get(rowGroup).getColumnStatistics());
+            if (!entry.getValue().isEmpty() && entry.getValue().get(rowGroup) != null) {
+                groupedColumnStatistics.computeIfAbsent(entry.getKey().getColumn(), key -> new ArrayList<>())
+                        .add(entry.getValue().get(rowGroup).getColumnStatistics());
+            }
         }
 
         ImmutableMap.Builder<Integer, ColumnStatistics> statistics = ImmutableMap.builder();
@@ -505,26 +509,61 @@ public class StripeReader
         return streamDiskRanges.build();
     }
 
-    private static Set<Integer> getIncludedOrcColumns(List<OrcType> types, Set<Integer> includedColumns)
+    private static Set<Integer> getIncludedOrcColumns(List<OrcType> types, Set<Integer> includedColumns, Map<Integer, List<Subfield>> requiredSubfields)
     {
         Set<Integer> includes = new LinkedHashSet<>();
 
         OrcType root = types.get(0);
         for (int includedColumn : includedColumns) {
-            includeOrcColumnsRecursive(types, includes, root.getFieldTypeIndex(includedColumn));
+            List<Subfield> subfields = Optional.ofNullable(requiredSubfields.get(includedColumn)).orElse(ImmutableList.of());
+            includeOrcColumnsRecursive(types, includes, root.getFieldTypeIndex(includedColumn), subfields);
         }
 
         return includes;
     }
 
-    private static void includeOrcColumnsRecursive(List<OrcType> types, Set<Integer> result, int typeId)
+    private static void includeOrcColumnsRecursive(List<OrcType> types, Set<Integer> result, int typeId, List<Subfield> requiredSubfields)
     {
         result.add(typeId);
         OrcType type = types.get(typeId);
+
+        Optional<Map<String, List<Subfield>>> requiredFields = Optional.empty();
+        if (type.getOrcTypeKind() == STRUCT) {
+            requiredFields = getRequiredFields(requiredSubfields);
+        }
+
         int children = type.getFieldCount();
         for (int i = 0; i < children; ++i) {
-            includeOrcColumnsRecursive(types, result, type.getFieldTypeIndex(i));
+            List<Subfield> subfields = ImmutableList.of();
+            if (requiredFields.isPresent()) {
+                String fieldName = type.getFieldNames().get(i);
+                if (!requiredFields.get().containsKey(fieldName)) {
+                    continue;
+                }
+                subfields = requiredFields.get().get(fieldName);
+            }
+
+            includeOrcColumnsRecursive(types, result, type.getFieldTypeIndex(i), subfields);
         }
+    }
+
+    private static Optional<Map<String, List<Subfield>>> getRequiredFields(List<Subfield> requiredSubfields)
+    {
+        if (requiredSubfields.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Map<String, List<Subfield>> fields = new HashMap<>();
+        for (Subfield subfield : requiredSubfields) {
+            List<Subfield.PathElement> path = subfield.getPath();
+            String name = ((Subfield.NestedField) path.get(0)).getName().toLowerCase(Locale.ENGLISH);
+            fields.computeIfAbsent(name, k -> new ArrayList<>());
+            if (path.size() > 1) {
+                fields.get(name).add(new Subfield("c", path.subList(1, path.size())));
+            }
+        }
+
+        return Optional.of(ImmutableMap.copyOf(fields));
     }
 
     /**

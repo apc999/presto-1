@@ -26,7 +26,9 @@ Functions and Operators
     functions/ip
     functions/geospatial
     functions/hyperloglog
+    functions/khyperloglog
     functions/qdigest
     functions/color
     functions/session
     functions/teradata
+    functions/internationalization

@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.orc.reader;
 
-import com.facebook.presto.memory.context.LocalMemoryContext;
+import com.facebook.presto.orc.OrcLocalMemoryContext;
 import com.facebook.presto.orc.StreamDescriptor;
 import com.facebook.presto.orc.TupleDomainFilter;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
@@ -81,7 +81,7 @@ public class SliceDirectSelectiveStreamReader
     private LongInputStream lengthStream;
 
     private boolean rowGroupOpen;
-    private LocalMemoryContext systemMemoryContext;
+    private OrcLocalMemoryContext systemMemoryContext;
     private boolean[] nulls;
 
     private int[] outputPositions;
@@ -96,7 +96,7 @@ public class SliceDirectSelectiveStreamReader
     private Slice dataAsSlice;          // data array wrapped in Slice
     private boolean valuesInUse;
 
-    public SliceDirectSelectiveStreamReader(StreamDescriptor streamDescriptor, Optional<TupleDomainFilter> filter, Optional<Type> outputType, LocalMemoryContext newLocalMemoryContext)
+    public SliceDirectSelectiveStreamReader(StreamDescriptor streamDescriptor, Optional<TupleDomainFilter> filter, Optional<Type> outputType, OrcLocalMemoryContext newLocalMemoryContext)
     {
         this.streamDescriptor = requireNonNull(streamDescriptor, "streamDescriptor is null");
         this.filter = requireNonNull(filter, "filter is null").orElse(null);
@@ -428,6 +428,12 @@ public class SliceDirectSelectiveStreamReader
     @Override
     public void close()
     {
+        dataAsSlice = null;
+        data = null;
+        lengthVector = null;
+        isNullVector = null;
+        offsets = null;
+        outputPositions = null;
         systemMemoryContext.close();
     }
 
@@ -500,12 +506,24 @@ public class SliceDirectSelectiveStreamReader
             lengthVector = ensureCapacity(lengthVector, nonNullCount);
             lengthStream.nextIntVector(nonNullCount, lengthVector, 0);
 
-            //TODO calculate totalLength for only requested positions
-            for (int i = 0; i < nonNullCount; i++) {
-                totalLength += lengthVector[i];
-                maxLength = Math.max(maxLength, lengthVector[i]);
+            int positionIndex = 0;
+            int lengthIndex = 0;
+            for (int i = 0; i < totalPositions; i++) {
+                boolean isNotNull = nullCount == 0 || !isNullVector[i];
+                if (i == positions[positionIndex]) {
+                    if (isNotNull) {
+                        totalLength += lengthVector[lengthIndex];
+                        maxLength = Math.max(maxLength, lengthVector[lengthIndex]);
+                        lengthIndex++;
+                    }
+                    positionIndex++;
+                }
+                else if (isNotNull) {
+                    lengthIndex++;
+                }
             }
 
+            // TODO Do not throw if outputRequired == false
             if (totalLength > ONE_GIGABYTE) {
                 throw new PrestoException(
                         GENERIC_INTERNAL_ERROR,

@@ -57,7 +57,6 @@ import static com.facebook.presto.operator.MoreByteArrays.fill;
 import static com.facebook.presto.operator.UncheckedByteArrays.setByteUnchecked;
 import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
-import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -90,6 +89,9 @@ public abstract class AbstractBlockEncodingBuffer
     // Whether the positions array has already been mapped to mappedPositions
     protected boolean positionsMapped;
 
+    // Whether the buffers have been flushed
+    protected boolean flushed;
+
     // The positions (row numbers) of the incoming Block to be copied to this buffer.
     // All top level AbstractBlockEncodingBuffer for the same partition share the same positions array.
     private int[] positions;
@@ -109,6 +111,9 @@ public abstract class AbstractBlockEncodingBuffer
     // The address offset in the nullsBuffer if new values are to be added.
     private int nullsBufferIndex;
 
+    // The target size for nullsBuffer
+    private int estimatedNullsBufferMaxCapacity;
+
     // For each batch we put the nulls values up to a multiple of 8 into nullsBuffer. The rest is kept in remainingNulls.
     private final boolean[] remainingNulls = new boolean[Byte.SIZE];
 
@@ -117,6 +122,8 @@ public abstract class AbstractBlockEncodingBuffer
 
     // Boolean indicating whether there are any null values in the nullsBuffer. It is possible that all values are non-null.
     private boolean hasEncodedNulls;
+
+    protected abstract void setupDecodedBlockAndMapPositions(DecodedBlockNode decodedBlockNode, int partitionBufferCapacity, double decodedBlockPageSizeFraction);
 
     protected AbstractBlockEncodingBuffer(ArrayAllocator bufferAllocator, boolean isNested)
     {
@@ -187,7 +194,7 @@ public abstract class AbstractBlockEncodingBuffer
     }
 
     @Override
-    public void setupDecodedBlocksAndPositions(DecodedBlockNode decodedBlockNode, int[] positions, int positionCount)
+    public void setupDecodedBlocksAndPositions(DecodedBlockNode decodedBlockNode, int[] positions, int positionCount, int partitionBufferCapacity, long estimatedSerializedPageSize)
     {
         requireNonNull(decodedBlockNode, "decodedBlockNode is null");
         requireNonNull(positions, "positions is null");
@@ -197,7 +204,9 @@ public abstract class AbstractBlockEncodingBuffer
         this.positionsOffset = 0;
         this.positionsMapped = false;
 
-        setupDecodedBlockAndMapPositions(decodedBlockNode);
+        double decodedBlockPageSizeFraction = (decodedBlockNode.getEstimatedSerializedSizeInBytes() - decodedBlockNode.getChildrenEstimatedSerializedSizeInBytes()) / ((double) estimatedSerializedPageSize);
+
+        setupDecodedBlockAndMapPositions(decodedBlockNode, partitionBufferCapacity, decodedBlockPageSizeFraction);
     }
 
     @Override
@@ -205,12 +214,12 @@ public abstract class AbstractBlockEncodingBuffer
     {
         this.positionsOffset = positionsOffset;
         this.batchSize = batchSize;
+        this.flushed = false;
     }
 
-    protected void setupDecodedBlockAndMapPositions(DecodedBlockNode decodedBlockNode)
+    protected void setEstimatedNullsBufferMaxCapacity(int estimatedNullsBufferMaxCapacity)
     {
-        requireNonNull(decodedBlockNode, "decodedBlockNode is null");
-        decodedBlock = (Block) mapPositionsToNestedBlock(decodedBlockNode).getDecodedBlock();
+        this.estimatedNullsBufferMaxCapacity = estimatedNullsBufferMaxCapacity;
     }
 
     /**
@@ -286,7 +295,7 @@ public abstract class AbstractBlockEncodingBuffer
         if (decodedBlock.mayHaveNull()) {
             // Write to nullsBuffer if there is a possibility to have nulls. It is possible that the
             // decodedBlock contains nulls, but rows that go into this partition don't. Write to nullsBuffer anyway.
-            nullsBuffer = ensureCapacity(nullsBuffer, (bufferedPositionCount + batchSize) / Byte.SIZE + 1, LARGE, PRESERVE);
+            nullsBuffer = ensureCapacity(nullsBuffer, (bufferedPositionCount + batchSize) / Byte.SIZE + 1, estimatedNullsBufferMaxCapacity, LARGE, PRESERVE, bufferAllocator);
 
             int bufferedNullsCount = nullsBufferIndex * Byte.SIZE + remainingNullsCount;
             if (bufferedPositionCount > bufferedNullsCount) {
@@ -300,7 +309,8 @@ public abstract class AbstractBlockEncodingBuffer
         else if (containsNull()) {
             // There were nulls in previously buffered rows, but for this batch there can't be any nulls.
             // Any how we need to append 0's for this batch.
-            nullsBuffer = ensureCapacity(nullsBuffer, (bufferedPositionCount + batchSize) / Byte.SIZE + 1, LARGE, PRESERVE);
+            nullsBuffer = ensureCapacity(nullsBuffer, (bufferedPositionCount + batchSize) / Byte.SIZE + 1, estimatedNullsBufferMaxCapacity, LARGE, PRESERVE, bufferAllocator);
+
             encodeNonNullsAsBits(batchSize);
         }
     }
@@ -317,6 +327,12 @@ public abstract class AbstractBlockEncodingBuffer
         if (mappedPositions != null) {
             bufferAllocator.returnArray(mappedPositions);
             mappedPositions = null;
+        }
+
+        // Only when this is the last batch in the page and it filled the buffer, the buffers can be recycled.
+        if (flushed && nullsBuffer != null) {
+            bufferAllocator.returnArray(nullsBuffer);
+            nullsBuffer = null;
         }
     }
 
@@ -345,11 +361,6 @@ public abstract class AbstractBlockEncodingBuffer
         nullsBufferIndex = 0;
         remainingNullsCount = 0;
         hasEncodedNulls = false;
-    }
-
-    protected long getNullsBufferRetainedSizeInBytes()
-    {
-        return sizeOf(nullsBuffer) + sizeOf(remainingNulls);
     }
 
     protected long getNullsBufferSerializedSizeInBytes()

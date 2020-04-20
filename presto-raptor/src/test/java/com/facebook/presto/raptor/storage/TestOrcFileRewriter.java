@@ -20,9 +20,10 @@ import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.orc.OrcWriterStats;
-import com.facebook.presto.orc.OutputStreamOrcDataSink;
+import com.facebook.presto.orc.OutputStreamDataSink;
 import com.facebook.presto.orc.StorageStripeMetadataSource;
 import com.facebook.presto.orc.cache.StorageOrcFileTailSource;
+import com.facebook.presto.raptor.RaptorOrcAggregatedMemoryContext;
 import com.facebook.presto.raptor.filesystem.FileSystemContext;
 import com.facebook.presto.raptor.filesystem.LocalOrcDataEnvironment;
 import com.facebook.presto.raptor.metadata.TableColumn;
@@ -502,8 +503,9 @@ public class TestOrcFileRewriter
                 ORC,
                 new StorageOrcFileTailSource(),
                 new StorageStripeMetadataSource(),
+                new RaptorOrcAggregatedMemoryContext(),
                 OrcTestingUtil.createDefaultTestConfig(),
-                DEFAULT_HIVE_FILE_CONTEXT);
+                false);
         orcReader.getColumnNames().equals(ImmutableList.of("7"));
 
         // Add a column with the different ID with different type
@@ -706,7 +708,7 @@ public class TestOrcFileRewriter
         return new OrcFileWriter(
                 columnIds,
                 columnTypes,
-                new OutputStreamOrcDataSink(new FileOutputStream(file)),
+                new OutputStreamDataSink(new FileOutputStream(file)),
                 writeMetadata,
                 true,
                 new OrcWriterStats(),

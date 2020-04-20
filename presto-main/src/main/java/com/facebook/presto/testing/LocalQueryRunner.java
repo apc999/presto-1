@@ -388,7 +388,8 @@ public class LocalQueryRunner
                 new RowExpressionDomainTranslator(metadata),
                 new RowExpressionPredicateCompiler(metadata),
                 new RowExpressionDeterminismEvaluator(metadata.getFunctionManager()),
-                new FilterStatsCalculator(metadata, scalarStatsCalculator, statsNormalizer));
+                new FilterStatsCalculator(metadata, scalarStatsCalculator, statsNormalizer),
+                blockEncodingManager);
 
         GlobalSystemConnectorFactory globalSystemConnectorFactory = new GlobalSystemConnectorFactory(ImmutableSet.of(
                 new NodeSystemTable(nodeManager),
@@ -599,6 +600,12 @@ public class LocalQueryRunner
     public void createCatalog(String catalogName, String connectorName, Map<String, String> properties)
     {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void loadFunctionNamespaceManager(String functionNamespaceManagerName, String catalogName, Map<String, String> properties)
+    {
+        metadata.getFunctionManager().loadFunctionNamespaceManager(functionNamespaceManagerName, catalogName, properties);
     }
 
     public LocalQueryRunner printPlan()

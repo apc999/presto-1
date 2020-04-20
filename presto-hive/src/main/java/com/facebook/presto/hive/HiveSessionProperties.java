@@ -63,6 +63,7 @@ public final class HiveSessionProperties
     private static final String ORC_OPTIMIZED_WRITER_MAX_STRIPE_SIZE = "orc_optimized_writer_max_stripe_size";
     private static final String ORC_OPTIMIZED_WRITER_MAX_STRIPE_ROWS = "orc_optimized_writer_max_stripe_rows";
     private static final String ORC_OPTIMIZED_WRITER_MAX_DICTIONARY_MEMORY = "orc_optimized_writer_max_dictionary_memory";
+    private static final String PAGEFILE_WRITER_MAX_STRIPE_SIZE = "pagefile_writer_max_stripe_size";
     private static final String HIVE_STORAGE_FORMAT = "hive_storage_format";
     private static final String COMPRESSION_CODEC = "compression_codec";
     private static final String RESPECT_TABLE_FORMAT = "respect_table_format";
@@ -96,6 +97,7 @@ public final class HiveSessionProperties
     public static final String VIRTUAL_BUCKET_COUNT = "virtual_bucket_count";
     public static final String MAX_BUCKETS_FOR_GROUPED_EXECUTION = "max_buckets_for_grouped_execution";
     public static final String OFFLINE_DATA_DEBUG_MODE_ENABLED = "offline_data_debug_mode_enabled";
+    public static final String FAIL_FAST_ON_INSERT_INTO_IMMUTABLE_PARTITIONS_ENABLED = "fail_fast_on_insert_into_immutable_partitions_enabled";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -240,6 +242,11 @@ public final class HiveSessionProperties
                         ORC_OPTIMIZED_WRITER_MAX_DICTIONARY_MEMORY,
                         "Experimental: ORC: Max dictionary memory",
                         orcFileWriterConfig.getDictionaryMaxMemory(),
+                        false),
+                dataSizeSessionProperty(
+                        PAGEFILE_WRITER_MAX_STRIPE_SIZE,
+                        "PAGEFILE: Max stripe size",
+                        hiveClientConfig.getPageFileStripeMaxSize(),
                         false),
                 stringProperty(
                         HIVE_STORAGE_FORMAT,
@@ -422,6 +429,11 @@ public final class HiveSessionProperties
                         SHUFFLE_PARTITIONED_COLUMNS_FOR_TABLE_WRITE,
                         "Shuffle the data on partitioned columns",
                         false,
+                        false),
+                booleanProperty(
+                        FAIL_FAST_ON_INSERT_INTO_IMMUTABLE_PARTITIONS_ENABLED,
+                        "Fail fast when trying to insert into an immutable partition. Increases load on the metastore",
+                        hiveClientConfig.isFailFastOnInsertIntoImmutablePartitionsEnabled(),
                         false));
     }
 
@@ -545,6 +557,11 @@ public final class HiveSessionProperties
     public static DataSize getOrcOptimizedWriterMaxDictionaryMemory(ConnectorSession session)
     {
         return session.getProperty(ORC_OPTIMIZED_WRITER_MAX_DICTIONARY_MEMORY, DataSize.class);
+    }
+
+    public static DataSize getPageFileStripeMaxSize(ConnectorSession session)
+    {
+        return session.getProperty(PAGEFILE_WRITER_MAX_STRIPE_SIZE, DataSize.class);
     }
 
     public static HiveStorageFormat getHiveStorageFormat(ConnectorSession session)
@@ -736,5 +753,10 @@ public final class HiveSessionProperties
         }
 
         return hiveClientConfig.isInsertOverwriteImmutablePartitionEnabled() ? OVERWRITE : ERROR;
+    }
+
+    public static boolean isFailFastOnInsertIntoImmutablePartitionsEnabled(ConnectorSession session)
+    {
+        return session.getProperty(FAIL_FAST_ON_INSERT_INTO_IMMUTABLE_PARTITIONS_ENABLED, Boolean.class);
     }
 }

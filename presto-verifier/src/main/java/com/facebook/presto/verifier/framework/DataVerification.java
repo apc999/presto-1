@@ -27,7 +27,7 @@ import static com.facebook.presto.verifier.framework.DataVerificationUtil.getCol
 import static com.facebook.presto.verifier.framework.DataVerificationUtil.match;
 import static com.facebook.presto.verifier.framework.QueryStage.CONTROL_CHECKSUM;
 import static com.facebook.presto.verifier.framework.QueryStage.TEST_CHECKSUM;
-import static com.facebook.presto.verifier.framework.VerifierUtil.callWithQueryStatsConsumer;
+import static com.facebook.presto.verifier.framework.VerifierUtil.callAndConsume;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
@@ -38,7 +38,6 @@ public class DataVerification
     private final ChecksumValidator checksumValidator;
 
     public DataVerification(
-            VerificationResubmitter verificationResubmitter,
             PrestoAction prestoAction,
             SourceQuery sourceQuery,
             QueryRewriter queryRewriter,
@@ -49,13 +48,13 @@ public class DataVerification
             TypeManager typeManager,
             ChecksumValidator checksumValidator)
     {
-        super(verificationResubmitter, prestoAction, sourceQuery, queryRewriter, determinismAnalyzer, failureResolverManager, verificationContext, verifierConfig);
+        super(prestoAction, sourceQuery, queryRewriter, determinismAnalyzer, failureResolverManager, verificationContext, verifierConfig);
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.checksumValidator = requireNonNull(checksumValidator, "checksumValidator is null");
     }
 
     @Override
-    public MatchResult verify(QueryBundle control, QueryBundle test)
+    public MatchResult verify(QueryBundle control, QueryBundle test, ChecksumQueryContext controlContext, ChecksumQueryContext testContext)
     {
         List<Column> controlColumns = getColumns(getPrestoAction(), typeManager, control.getTableName());
         List<Column> testColumns = getColumns(getPrestoAction(), typeManager, test.getTableName());
@@ -63,15 +62,15 @@ public class DataVerification
         Query controlChecksumQuery = checksumValidator.generateChecksumQuery(control.getTableName(), controlColumns);
         Query testChecksumQuery = checksumValidator.generateChecksumQuery(test.getTableName(), testColumns);
 
-        getVerificationContext().setControlChecksumQuery(formatSql(controlChecksumQuery));
-        getVerificationContext().setTestChecksumQuery(formatSql(testChecksumQuery));
+        controlContext.setChecksumQuery(formatSql(controlChecksumQuery));
+        testContext.setChecksumQuery(formatSql(testChecksumQuery));
 
-        QueryResult<ChecksumResult> controlChecksum = callWithQueryStatsConsumer(
+        QueryResult<ChecksumResult> controlChecksum = callAndConsume(
                 () -> getPrestoAction().execute(controlChecksumQuery, CONTROL_CHECKSUM, ChecksumResult::fromResultSet),
-                stats -> getVerificationContext().setControlChecksumQueryId(stats.getQueryId()));
-        QueryResult<ChecksumResult> testChecksum = callWithQueryStatsConsumer(
+                stats -> controlContext.setChecksumQueryId(stats.getQueryId()));
+        QueryResult<ChecksumResult> testChecksum = callAndConsume(
                 () -> getPrestoAction().execute(testChecksumQuery, TEST_CHECKSUM, ChecksumResult::fromResultSet),
-                stats -> getVerificationContext().setTestChecksumQueryId(stats.getQueryId()));
+                stats -> testContext.setChecksumQueryId(stats.getQueryId()));
 
         return match(checksumValidator, controlColumns, testColumns, getOnlyElement(controlChecksum.getResults()), getOnlyElement(testChecksum.getResults()));
     }

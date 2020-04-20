@@ -15,7 +15,6 @@ package com.facebook.presto.operator.repartition;
 
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.buffer.OutputBuffer;
-import com.facebook.presto.execution.buffer.PagesSerde;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.DriverContext;
@@ -38,6 +37,7 @@ import com.facebook.presto.spi.block.DictionaryBlock;
 import com.facebook.presto.spi.block.MapBlock;
 import com.facebook.presto.spi.block.RowBlock;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
+import com.facebook.presto.spi.page.PagesSerde;
 import com.facebook.presto.spi.page.SerializedPage;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.ConstantExpression;
@@ -99,7 +99,8 @@ public class OptimizedPartitionedOutputOperator
             OptionalInt nullChannel,
             OutputBuffer outputBuffer,
             PagesSerdeFactory serdeFactory,
-            DataSize maxMemory)
+            DataSize maxMemory,
+            int maxBufferCount)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.pagePreprocessor = requireNonNull(pagePreprocessor, "pagePreprocessor is null");
@@ -113,6 +114,7 @@ public class OptimizedPartitionedOutputOperator
                 serdeFactory,
                 sourceTypes,
                 maxMemory,
+                maxBufferCount,
                 operatorContext.getDriverContext().getLifespan());
 
         operatorContext.setInfoSupplier(this::getInfo);
@@ -229,11 +231,13 @@ public class OptimizedPartitionedOutputOperator
     {
         private final OutputBuffer outputBuffer;
         private final DataSize maxMemory;
+        private final int maxBufferCount;
 
-        public OptimizedPartitionedOutputFactory(OutputBuffer outputBuffer, DataSize maxMemory)
+        public OptimizedPartitionedOutputFactory(OutputBuffer outputBuffer, DataSize maxMemory, int maxBufferCount)
         {
             this.outputBuffer = requireNonNull(outputBuffer, "outputBuffer is null");
             this.maxMemory = requireNonNull(maxMemory, "maxMemory is null");
+            this.maxBufferCount = maxBufferCount;
         }
 
         @Override
@@ -258,7 +262,8 @@ public class OptimizedPartitionedOutputOperator
                     outputPartitioning.get().getNullChannel(),
                     outputBuffer,
                     serdeFactory,
-                    maxMemory);
+                    maxMemory,
+                    maxBufferCount);
         }
     }
 
@@ -277,6 +282,7 @@ public class OptimizedPartitionedOutputOperator
         private final OutputBuffer outputBuffer;
         private final PagesSerdeFactory serdeFactory;
         private final DataSize maxMemory;
+        private final int maxBufferCount;
 
         public OptimizedPartitionedOutputOperatorFactory(
                 int operatorId,
@@ -290,7 +296,8 @@ public class OptimizedPartitionedOutputOperator
                 OptionalInt nullChannel,
                 OutputBuffer outputBuffer,
                 PagesSerdeFactory serdeFactory,
-                DataSize maxMemory)
+                DataSize maxMemory,
+                int maxBufferCount)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
@@ -304,6 +311,7 @@ public class OptimizedPartitionedOutputOperator
             this.outputBuffer = requireNonNull(outputBuffer, "outputBuffer is null");
             this.serdeFactory = requireNonNull(serdeFactory, "serdeFactory is null");
             this.maxMemory = requireNonNull(maxMemory, "maxMemory is null");
+            this.maxBufferCount = maxBufferCount;
         }
 
         @Override
@@ -321,7 +329,8 @@ public class OptimizedPartitionedOutputOperator
                     nullChannel,
                     outputBuffer,
                     serdeFactory,
-                    maxMemory);
+                    maxMemory,
+                    maxBufferCount);
         }
 
         @Override
@@ -344,7 +353,8 @@ public class OptimizedPartitionedOutputOperator
                     nullChannel,
                     outputBuffer,
                     serdeFactory,
-                    maxMemory);
+                    maxMemory,
+                    maxBufferCount);
         }
     }
 
@@ -367,7 +377,7 @@ public class OptimizedPartitionedOutputOperator
         private final Closer blockLeaseCloser = Closer.create();
 
         // The ArrayAllocator for the buffers used in repartitioning, e.g. PartitionBuffer#serializedRowSizes, BlockEncodingBuffer#mappedPositions.
-        private final ArrayAllocator bufferAllocator = new SimpleArrayAllocator(10_000);
+        private final ArrayAllocator bufferAllocator;
 
         private final PartitionBuffer[] partitionBuffers;
         private final List<Type> sourceTypes;
@@ -387,6 +397,7 @@ public class OptimizedPartitionedOutputOperator
                 PagesSerdeFactory serdeFactory,
                 List<Type> sourceTypes,
                 DataSize maxMemory,
+                int maxBufferCount,
                 Lifespan lifespan)
         {
             this.partitionFunction = requireNonNull(partitionFunction, "pagePartitioner is null");
@@ -401,11 +412,12 @@ public class OptimizedPartitionedOutputOperator
 
             int partitionCount = partitionFunction.getPartitionCount();
 
-            int pageSize = max(1, min(DEFAULT_MAX_PAGE_SIZE_IN_BYTES, toIntExact(maxMemory.toBytes()) / partitionCount));
+            int partitionBufferCapacity = max(1, min(DEFAULT_MAX_PAGE_SIZE_IN_BYTES, toIntExact(maxMemory.toBytes()) / partitionCount));
+            bufferAllocator = new SimpleArrayAllocator(maxBufferCount);
 
             partitionBuffers = new PartitionBuffer[partitionCount];
             for (int i = 0; i < partitionCount; i++) {
-                partitionBuffers[i] = new PartitionBuffer(i, sourceTypes.size(), pageSize, pagesAdded, rowsAdded, serde, lifespan, bufferAllocator);
+                partitionBuffers[i] = new PartitionBuffer(i, sourceTypes.size(), partitionBufferCapacity, pagesAdded, rowsAdded, serde, lifespan, bufferAllocator);
             }
 
             this.sourceTypes = sourceTypes;
@@ -467,13 +479,15 @@ public class OptimizedPartitionedOutputOperator
             }
 
             // Decode the page just once. The decoded blocks will be fed to each PartitionBuffer object to set up AbstractBlockEncodingBuffer.
+            long estimatedSerializedPageSize = 0;
             for (int i = 0; i < decodedBlocks.length; i++) {
                 decodedBlocks[i] = decodeBlock(flattener, blockLeaseCloser, page.getBlock(i));
+                estimatedSerializedPageSize += decodedBlocks[i].getEstimatedSerializedSizeInBytes();
             }
 
             // Copy the data to their destination partitions and flush when the buffer is full.
             for (int i = 0; i < partitionBuffers.length; i++) {
-                partitionBuffers[i].appendData(decodedBlocks, fixedWidthRowSize, variableWidthChannels, outputBuffer);
+                partitionBuffers[i].appendData(decodedBlocks, estimatedSerializedPageSize, fixedWidthRowSize, variableWidthChannels, outputBuffer);
             }
 
             // Return all borrowed arrays
@@ -583,7 +597,7 @@ public class OptimizedPartitionedOutputOperator
             positions[positionCount++] = position;
         }
 
-        private void appendData(DecodedBlockNode[] decodedBlocks, int fixedWidthRowSize, List<Integer> variableWidthChannels, OutputBuffer outputBuffer)
+        private void appendData(DecodedBlockNode[] decodedBlocks, long estimatedSerializedPageSize, int fixedWidthRowSize, List<Integer> variableWidthChannels, OutputBuffer outputBuffer)
         {
             if (decodedBlocks.length != channelCount) {
                 throw new IllegalArgumentException(format("Unexpected number of decoded blocks %d. It should be %d.", decodedBlocks.length, channelCount));
@@ -601,7 +615,7 @@ public class OptimizedPartitionedOutputOperator
             initializeBlockEncodingBuffers(decodedBlocks);
 
             for (int i = 0; i < channelCount; i++) {
-                blockEncodingBuffers[i].setupDecodedBlocksAndPositions(decodedBlocks[i], positions, positionCount);
+                blockEncodingBuffers[i].setupDecodedBlocksAndPositions(decodedBlocks[i], positions, positionCount, capacity, estimatedSerializedPageSize);
             }
 
             int[] serializedRowSizes = ensureCapacity(null, positionCount, SMALL, INITIALIZE, bufferAllocator);
@@ -611,6 +625,7 @@ public class OptimizedPartitionedOutputOperator
                 // Due to the limitation of buffer size, we append the data batch by batch
                 int offset = 0;
                 do {
+                    bufferFull = false;
                     int batchSize = calculateNextBatchSize(fixedWidthRowSize, variableWidthChannels, offset, serializedRowSizes);
 
                     for (int i = 0; i < channelCount; i++) {
@@ -623,7 +638,6 @@ public class OptimizedPartitionedOutputOperator
 
                     if (bufferFull) {
                         flush(outputBuffer);
-                        bufferFull = false;
                     }
                 }
                 while (offset < positionCount);
@@ -631,7 +645,7 @@ public class OptimizedPartitionedOutputOperator
             finally {
                 // Return the borrowed array for serializedRowSizes when the current page for the current partition is finished.
                 bufferAllocator.returnArray(serializedRowSizes);
-                for (int i = 0; i < channelCount; i++) {
+                for (int i = channelCount - 1; i >= 0; i--) {
                     blockEncodingBuffers[i].noMoreBatches();
                 }
             }

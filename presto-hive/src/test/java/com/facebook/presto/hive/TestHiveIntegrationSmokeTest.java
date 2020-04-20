@@ -27,6 +27,7 @@ import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.MarkDistinctNode;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.Type;
@@ -34,7 +35,6 @@ import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig.PartialMergePushdownStrategy;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.TableWriterMergeNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
@@ -93,14 +93,12 @@ import static com.facebook.presto.hive.HiveSessionProperties.RCFILE_OPTIMIZED_WR
 import static com.facebook.presto.hive.HiveSessionProperties.SORTED_WRITE_TEMP_PATH_SUBDIRECTORY_COUNT;
 import static com.facebook.presto.hive.HiveSessionProperties.SORTED_WRITE_TO_TEMP_PATH_ENABLED;
 import static com.facebook.presto.hive.HiveSessionProperties.getInsertExistingPartitionsBehavior;
-import static com.facebook.presto.hive.HiveSessionProperties.isPushdownFilterEnabled;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.PARTITIONED_BY_PROPERTY;
 import static com.facebook.presto.hive.HiveTableProperties.STORAGE_FORMAT_PROPERTY;
 import static com.facebook.presto.hive.HiveTestUtils.TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveUtil.columnExtraInfo;
-import static com.facebook.presto.spi.predicate.Marker.Bound.ABOVE;
 import static com.facebook.presto.spi.predicate.Marker.Bound.EXACTLY;
 import static com.facebook.presto.spi.security.SelectedRole.Type.ROLE;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -237,17 +235,7 @@ public class TestHiveIntegrationSmokeTest
                                 new FormattedRange(
                                         new FormattedMarker(Optional.of("false"), EXACTLY),
                                         new FormattedMarker(Optional.of("false"), EXACTLY))))));
-        if (isPushdownFilterEnabled(getConnectorSession(getSession()))) {
-            expectedConstraints.add(new ColumnConstraint(
-                    "custkey",
-                    BIGINT.getTypeSignature(),
-                    new FormattedDomain(
-                            false,
-                            ImmutableSet.of(
-                                    new FormattedRange(
-                                            new FormattedMarker(Optional.empty(), ABOVE),
-                                            new FormattedMarker(Optional.of("10"), EXACTLY))))));
-        }
+
         assertEquals(
                 jsonCodec(IOPlan.class).fromJson((String) getOnlyElement(result.getOnlyColumnAsSet())),
                 new IOPlan(
@@ -271,17 +259,6 @@ public class TestHiveIntegrationSmokeTest
                                 new FormattedRange(
                                         new FormattedMarker(Optional.of("1"), EXACTLY),
                                         new FormattedMarker(Optional.of("199"), EXACTLY))))));
-        if (isPushdownFilterEnabled(getConnectorSession(getSession()))) {
-            expectedConstraints.add(new ColumnConstraint(
-                    "custkey",
-                    BIGINT.getTypeSignature(),
-                    new FormattedDomain(
-                            false,
-                            ImmutableSet.of(
-                                    new FormattedRange(
-                                            new FormattedMarker(Optional.empty(), ABOVE),
-                                            new FormattedMarker(Optional.of("10"), EXACTLY))))));
-        }
 
         result = computeActual("EXPLAIN (TYPE IO, FORMAT JSON) INSERT INTO test_orders SELECT custkey, orderkey + 10 FROM test_orders where custkey <= 10");
         assertEquals(
@@ -1102,8 +1079,8 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testCreateEmptyBucketedPartition()
     {
-        for (TestingHiveStorageFormat storageFormat : getAllTestingHiveStorageFormat()) {
-            testCreateEmptyBucketedPartition(storageFormat.getFormat());
+        for (HiveStorageFormat storageFormat : HiveStorageFormat.values()) {
+            testCreateEmptyBucketedPartition(storageFormat);
         }
     }
 
@@ -1548,6 +1525,92 @@ public class TestHiveIntegrationSmokeTest
     }
 
     @Test
+    public void testInsertPartitionedTableImmutableExistingPartition()
+    {
+        testInsertPartitionedTableImmutableExistingPartition(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty(catalog, "insert_existing_partitions_behavior", "ERROR")
+                        .build(),
+                HiveStorageFormat.ORC);
+        testInsertPartitionedTableImmutableExistingPartition(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty(catalog, "insert_existing_partitions_behavior", "ERROR")
+                        .setCatalogSessionProperty(catalog, "temporary_staging_directory_enabled", "false")
+                        .build(),
+                HiveStorageFormat.ORC);
+        testInsertPartitionedTableImmutableExistingPartition(
+                Session.builder(getSession())
+                        .setCatalogSessionProperty(catalog, "insert_existing_partitions_behavior", "ERROR")
+                        .setCatalogSessionProperty(catalog, "fail_fast_on_insert_into_immutable_partitions_enabled", "false")
+                        .build(),
+                HiveStorageFormat.ORC);
+    }
+
+    public void testInsertPartitionedTableImmutableExistingPartition(Session session, HiveStorageFormat storageFormat)
+    {
+        String tableName = "test_insert_partitioned_table_immutable_existing_partition";
+
+        @Language("SQL") String createTable = "" +
+                "CREATE TABLE " + tableName + " " +
+                "(" +
+                "  order_key BIGINT," +
+                "  comment VARCHAR," +
+                "  order_status VARCHAR" +
+                ") " +
+                "WITH (" +
+                "format = '" + storageFormat + "', " +
+                "partitioned_by = ARRAY[ 'order_status' ]" +
+                ") ";
+
+        assertUpdate(session, createTable);
+
+        TableMetadata tableMetadata = getTableMetadata(catalog, TPCH_SCHEMA, tableName);
+        assertEquals(tableMetadata.getMetadata().getProperties().get(STORAGE_FORMAT_PROPERTY), storageFormat);
+        assertEquals(tableMetadata.getMetadata().getProperties().get(PARTITIONED_BY_PROPERTY), ImmutableList.of("order_status"));
+
+        assertUpdate(
+                session,
+                format(
+                        "INSERT INTO " + tableName + " " +
+                                "SELECT orderkey, comment, orderstatus " +
+                                "FROM tpch.tiny.orders " +
+                                "WHERE orderkey %% 3 = %d",
+                        0),
+                format("SELECT count(*) from orders where orderkey %% 3 = %d", 0));
+
+        // verify the partitions
+        List<?> partitions = getPartitions(tableName);
+        assertEquals(partitions.size(), 3);
+
+        assertQuery(
+                session,
+                "SELECT * from " + tableName,
+                format("SELECT orderkey, comment, orderstatus FROM orders where orderkey %% 3 = %d", 0));
+
+        assertQueryFails(
+                session,
+                format(
+                        "INSERT INTO " + tableName + " " +
+                                "SELECT orderkey, comment, orderstatus " +
+                                "FROM tpch.tiny.orders " +
+                                "WHERE orderkey %% 3 = %d",
+                        0),
+                ".*Cannot insert into an existing partition of Hive table.*");
+
+        partitions = getPartitions(tableName);
+        assertEquals(partitions.size(), 3);
+
+        assertQuery(
+                session,
+                "SELECT * from " + tableName,
+                format("SELECT orderkey, comment, orderstatus FROM orders where orderkey %% 3 = %d", 0));
+
+        assertUpdate(session, "DROP TABLE " + tableName);
+
+        assertFalse(getQueryRunner().tableExists(session, tableName));
+    }
+
+    @Test
     public void testNullPartitionValues()
     {
         assertUpdate("" +
@@ -1570,8 +1633,7 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testPartitionPerScanLimit()
     {
-        TestingHiveStorageFormat storageFormat = new TestingHiveStorageFormat(getSession(), HiveStorageFormat.DWRF);
-        testWithStorageFormat(storageFormat, this::testPartitionPerScanLimit);
+        testPartitionPerScanLimit(getSession(), HiveStorageFormat.DWRF);
     }
 
     private void testPartitionPerScanLimit(Session session, HiveStorageFormat storageFormat)
@@ -2187,6 +2249,55 @@ public class TestHiveIntegrationSmokeTest
             assertUpdate(session, "DROP TABLE IF EXISTS create_partitioned_sorted_table");
             assertUpdate(session, "DROP TABLE IF EXISTS create_unpartitioned_sorted_table");
             assertUpdate(session, "DROP TABLE IF EXISTS insert_partitioned_sorted_table");
+        }
+    }
+
+    @Test
+    public void testWritePreferredOrderingTable()
+    {
+        try {
+            // create table
+            assertUpdate(
+                    "CREATE TABLE create_partitioned_ordering_table (orderkey, custkey, totalprice, orderdate, orderpriority, clerk, shippriority, comment, orderstatus)\n" +
+                            "WITH (partitioned_by = ARRAY['orderstatus'], preferred_ordering_columns = ARRAY['orderkey']) AS\n" +
+                            "SELECT orderkey, custkey, totalprice, orderdate, orderpriority, clerk, shippriority, comment, orderstatus FROM tpch.sf1.orders",
+                    (long) computeActual("SELECT count(*) FROM tpch.sf1.orders").getOnlyValue());
+            assertQuery(
+                    "SELECT count(*) FROM create_partitioned_ordering_table",
+                    "SELECT count(*) * 100 FROM orders");
+
+            assertUpdate(
+                    "CREATE TABLE create_unpartitioned_ordering_table (orderkey, custkey, totalprice, orderdate, orderpriority, clerk, shippriority, comment, orderstatus)\n" +
+                            "WITH (preferred_ordering_columns = ARRAY['orderkey']) AS\n" +
+                            "SELECT orderkey, custkey, totalprice, orderdate, orderpriority, clerk, shippriority, comment, orderstatus FROM tpch.sf1.orders",
+                    (long) computeActual("SELECT count(*) FROM tpch.sf1.orders").getOnlyValue());
+            assertQuery(
+                    "SELECT count(*) FROM create_unpartitioned_ordering_table",
+                    "SELECT count(*) * 100 FROM orders");
+
+            // insert
+            assertUpdate(
+                    "CREATE TABLE insert_partitioned_ordering_table (LIKE create_partitioned_ordering_table) " +
+                            "WITH (partitioned_by = ARRAY['orderstatus'], preferred_ordering_columns = ARRAY['orderkey'])");
+
+            assertUpdate(
+                    "INSERT INTO insert_partitioned_ordering_table\n" +
+                            "SELECT orderkey, custkey, totalprice, orderdate, orderpriority, clerk, shippriority, comment, orderstatus FROM tpch.sf1.orders",
+                    (long) computeActual("SELECT count(*) FROM tpch.sf1.orders").getOnlyValue());
+            assertQuery(
+                    "SELECT count(*) FROM insert_partitioned_ordering_table",
+                    "SELECT count(*) * 100 FROM orders");
+
+            // invalid
+            assertQueryFails(
+                    "CREATE TABLE invalid_bucketed_ordering_table (LIKE create_partitioned_ordering_table) " +
+                            "WITH (preferred_ordering_columns = ARRAY['orderkey'], bucketed_by = ARRAY['totalprice'], bucket_count = 13)",
+                    ".*preferred_ordering_columns must not be specified when bucketed_by is specified.*");
+        }
+        finally {
+            assertUpdate("DROP TABLE IF EXISTS create_partitioned_ordering_table");
+            assertUpdate("DROP TABLE IF EXISTS create_unpartitioned_ordering_table");
+            assertUpdate("DROP TABLE IF EXISTS insert_partitioned_ordering_table");
         }
     }
 
@@ -4601,6 +4712,30 @@ public class TestHiveIntegrationSmokeTest
         assertUpdate("DROP TABLE test_show_properties");
     }
 
+    @Test
+    public void testPageFileFormatSmallStripe()
+    {
+        Session smallStripeSession = Session.builder(getQueryRunner().getDefaultSession())
+                .setCatalogSessionProperty(catalog, "pagefile_writer_max_stripe_size", "1B")
+                .build();
+        assertUpdate(
+                smallStripeSession,
+                "CREATE TABLE test_pagefile_orders\n" +
+                "WITH (\n" +
+                "format = 'PAGEFILE'\n" +
+                ") AS\n" +
+                "SELECT\n" +
+                "*\n" +
+                "FROM tpch.orders",
+                "SELECT count(*) FROM orders");
+
+        assertQuery("SELECT count(*) FROM test_pagefile_orders", "SELECT count(*) FROM orders");
+
+        assertQuery("SELECT sum(custkey) FROM test_pagefile_orders", "SELECT sum(custkey) FROM orders");
+
+        assertUpdate("DROP TABLE test_pagefile_orders");
+    }
+
     private static Consumer<Plan> assertTableWriterMergeNodeIsPresent()
     {
         return plan -> assertTrue(searchFrom(plan.getRoot())
@@ -4704,59 +4839,8 @@ public class TestHiveIntegrationSmokeTest
 
     private void testWithAllStorageFormats(BiConsumer<Session, HiveStorageFormat> test)
     {
-        for (TestingHiveStorageFormat storageFormat : getAllTestingHiveStorageFormat()) {
-            testWithStorageFormat(storageFormat, test);
-        }
-    }
-
-    private static void testWithStorageFormat(TestingHiveStorageFormat storageFormat, BiConsumer<Session, HiveStorageFormat> test)
-    {
-        requireNonNull(storageFormat, "storageFormat is null");
-        requireNonNull(test, "test is null");
-        Session session = storageFormat.getSession();
-        try {
-            test.accept(session, storageFormat.getFormat());
-        }
-        catch (Exception | AssertionError e) {
-            fail(format("Failure for format %s with properties %s", storageFormat.getFormat(), session.getConnectorProperties()), e);
-        }
-    }
-
-    private List<TestingHiveStorageFormat> getAllTestingHiveStorageFormat()
-    {
-        Session session = getSession();
-        ImmutableList.Builder<TestingHiveStorageFormat> formats = ImmutableList.builder();
-        for (HiveStorageFormat hiveStorageFormat : HiveStorageFormat.values()) {
-            formats.add(new TestingHiveStorageFormat(session, hiveStorageFormat));
-        }
-        formats.add(new TestingHiveStorageFormat(
-                Session.builder(session).setCatalogSessionProperty(session.getCatalog().get(), "orc_optimized_writer_enabled", "true").build(),
-                HiveStorageFormat.ORC));
-        formats.add(new TestingHiveStorageFormat(
-                Session.builder(session).setCatalogSessionProperty(session.getCatalog().get(), "orc_optimized_writer_enabled", "true").build(),
-                HiveStorageFormat.DWRF));
-        return formats.build();
-    }
-
-    private static class TestingHiveStorageFormat
-    {
-        private final Session session;
-        private final HiveStorageFormat format;
-
-        TestingHiveStorageFormat(Session session, HiveStorageFormat format)
-        {
-            this.session = requireNonNull(session, "session is null");
-            this.format = requireNonNull(format, "format is null");
-        }
-
-        public Session getSession()
-        {
-            return session;
-        }
-
-        public HiveStorageFormat getFormat()
-        {
-            return format;
+        for (HiveStorageFormat storageFormat : HiveStorageFormat.values()) {
+            test.accept(getSession(), storageFormat);
         }
     }
 }

@@ -13,8 +13,6 @@
  */
 package com.facebook.presto.orc;
 
-import com.facebook.presto.hive.HiveFileContext;
-import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.orc.metadata.ColumnEncoding;
 import com.facebook.presto.orc.metadata.MetadataReader;
 import com.facebook.presto.orc.metadata.OrcType;
@@ -25,6 +23,7 @@ import com.facebook.presto.orc.metadata.statistics.StripeStatistics;
 import com.facebook.presto.orc.reader.StreamReader;
 import com.facebook.presto.orc.stream.InputStreamSources;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.Subfield;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.FixedWidthType;
 import com.facebook.presto.spi.type.Type;
@@ -87,7 +86,7 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
     private final List<StripeInformation> stripes;
     private final StripeReader stripeReader;
     private int currentStripe = -1;
-    private AggregatedMemoryContext currentStripeSystemMemoryContext;
+    private OrcAggregatedMemoryContext currentStripeSystemMemoryContext;
 
     private final long fileRowCount;
     private final List<Long> stripeFilePositions;
@@ -103,7 +102,7 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
 
     private final Map<String, Slice> userMetadata;
 
-    private final AggregatedMemoryContext systemMemoryUsage;
+    private final OrcAggregatedMemoryContext systemMemoryUsage;
 
     private final Optional<OrcWriteValidation> writeValidation;
     private final Optional<OrcWriteValidation.WriteChecksumBuilder> writeChecksumBuilder;
@@ -113,6 +112,7 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
 
     public AbstractOrcRecordReader(
             Map<Integer, Type> includedColumns,
+            Map<Integer, List<Subfield>> requiredSubfields,
             T[] streamReaders,
             OrcPredicate predicate,
             long numberOfRows,
@@ -132,11 +132,11 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
             DataSize tinyStripeThreshold,
             DataSize maxBlockSize,
             Map<String, Slice> userMetadata,
-            AggregatedMemoryContext systemMemoryUsage,
+            OrcAggregatedMemoryContext systemMemoryUsage,
             Optional<OrcWriteValidation> writeValidation,
             int initialBatchSize,
             StripeMetadataSource stripeMetadataSource,
-            HiveFileContext hiveFileContext)
+            boolean cacheable)
     {
         requireNonNull(includedColumns, "includedColumns is null");
         requireNonNull(predicate, "predicate is null");
@@ -216,20 +216,21 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
 
         this.userMetadata = ImmutableMap.copyOf(Maps.transformValues(userMetadata, Slices::copyOf));
 
-        this.currentStripeSystemMemoryContext = this.systemMemoryUsage.newAggregatedMemoryContext();
+        this.currentStripeSystemMemoryContext = this.systemMemoryUsage.newOrcAggregatedMemoryContext();
 
         stripeReader = new StripeReader(
                 orcDataSource,
                 decompressor,
                 types,
                 this.presentColumns,
+                requiredSubfields,
                 rowsInRowGroup,
                 predicate,
                 hiveWriterVersion,
                 metadataReader,
                 writeValidation,
                 stripeMetadataSource,
-                hiveFileContext);
+                cacheable);
 
         this.streamReaders = requireNonNull(streamReaders, "streamReaders is null");
         for (int columnId = 0; columnId < root.getFieldCount(); columnId++) {
@@ -385,7 +386,7 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
                 }
             }
         }
-
+        rowGroups = null;
         if (writeChecksumBuilder.isPresent()) {
             OrcWriteValidation.WriteChecksum actualChecksum = writeChecksumBuilder.get().build();
             validateWrite(validation -> validation.getChecksum().getTotalRowCount() == actualChecksum.getTotalRowCount(), "Invalid row count");
@@ -508,7 +509,7 @@ abstract class AbstractOrcRecordReader<T extends StreamReader>
             throws IOException
     {
         currentStripeSystemMemoryContext.close();
-        currentStripeSystemMemoryContext = systemMemoryUsage.newAggregatedMemoryContext();
+        currentStripeSystemMemoryContext = systemMemoryUsage.newOrcAggregatedMemoryContext();
         rowGroups = ImmutableList.<RowGroup>of().iterator();
 
         if (currentStripe >= 0) {

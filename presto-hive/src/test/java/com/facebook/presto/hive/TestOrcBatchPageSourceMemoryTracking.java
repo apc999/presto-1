@@ -430,6 +430,7 @@ public class TestOrcBatchPageSourceMemoryTracking
                     "location",
                     Optional.empty(),
                     false,
+                    ImmutableMap.of(),
                     ImmutableMap.of());
 
             partitionKeys = testColumns.stream()
@@ -482,8 +483,7 @@ public class TestOrcBatchPageSourceMemoryTracking
                     stats,
                     100,
                     new StorageOrcFileTailSource(),
-                    new StorageStripeMetadataSource(),
-                    new HadoopFileOpener());
+                    new StorageStripeMetadataSource());
             return HivePageSourceProvider.createHivePageSource(
                     ImmutableSet.of(),
                     ImmutableSet.of(orcPageSourceFactory),

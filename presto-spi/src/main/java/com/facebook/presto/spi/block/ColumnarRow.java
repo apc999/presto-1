@@ -13,12 +13,19 @@
  */
 package com.facebook.presto.spi.block;
 
+import org.openjdk.jol.info.ClassLayout;
+
+import static io.airlift.slice.SizeOf.sizeOf;
 import static java.util.Objects.requireNonNull;
 
 public final class ColumnarRow
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ColumnarRow.class).instanceSize();
+
     private final Block nullCheckBlock;
     private final Block[] fields;
+    private final long retainedSizeInBytes;
+    private final long estimatedSerializedSizeInBytes;
 
     public static ColumnarRow toColumnarRow(Block block)
     {
@@ -45,7 +52,7 @@ public final class ColumnarRow
             fieldBlocks[i] = rowBlock.getRawFieldBlocks()[i].getRegion(firstRowPosition, totalRowCount);
         }
 
-        return new ColumnarRow(block, fieldBlocks);
+        return new ColumnarRow(block, fieldBlocks, block.getRetainedSizeInBytes(), block.getSizeInBytes());
     }
 
     private static ColumnarRow toColumnarRow(DictionaryBlock dictionaryBlock)
@@ -62,9 +69,10 @@ public final class ColumnarRow
         }
 
         // reindex the dictionary
-        int[] dictionaryIds = new int[dictionaryBlock.getPositionCount()];
+        int positionCount = dictionaryBlock.getPositionCount();
+        int[] dictionaryIds = new int[positionCount];
         int nonNullPositionCount = 0;
-        for (int position = 0; position < dictionaryBlock.getPositionCount(); position++) {
+        for (int position = 0; position < positionCount; position++) {
             if (!dictionaryBlock.isNull(position)) {
                 int oldDictionaryId = dictionaryBlock.getId(position);
                 dictionaryIds[nonNullPositionCount] = newDictionaryIndex[oldDictionaryId];
@@ -72,20 +80,34 @@ public final class ColumnarRow
             }
         }
 
-        ColumnarRow columnarRow = toColumnarRow(dictionaryBlock.getDictionary());
+        ColumnarRow columnarRow = toColumnarRow(dictionary);
         Block[] fields = new Block[columnarRow.getFieldCount()];
+        long averageRowSize = 0;
         for (int i = 0; i < columnarRow.getFieldCount(); i++) {
-            fields[i] = new DictionaryBlock(nonNullPositionCount, columnarRow.getField(i), dictionaryIds);
+            Block field = columnarRow.getField(i);
+            fields[i] = new DictionaryBlock(nonNullPositionCount, field, dictionaryIds);
+            averageRowSize += field.getSizeInBytes() / field.getPositionCount();
         }
-        return new ColumnarRow(dictionaryBlock, fields);
+        return new ColumnarRow(
+                dictionaryBlock,
+                fields,
+                INSTANCE_SIZE + dictionaryBlock.getRetainedSizeInBytes() + sizeOf(dictionaryIds),
+                // The estimated serialized size is the sum of the following:
+                // 1) the offsets size: Integer.BYTES * positionCount. Note that even though ColumnarRow doesn't have the offsets array, the serialized RowBlock still has it. Please see RowBlockEncodingBuffer.
+                // 2) nulls array size: Byte.BYTES * positionCount
+                // 3) the estimated serialized size for the fields Blocks which were just constructed as new DictionaryBlocks:
+                //     the average row size: averageRowSize * the number of rows: nonNullPositionCount
+                (Integer.BYTES + Byte.BYTES) * positionCount + averageRowSize * nonNullPositionCount);
     }
 
     private static ColumnarRow toColumnarRow(RunLengthEncodedBlock rleBlock)
     {
         Block rleValue = rleBlock.getValue();
+        int positionCount = rleBlock.getPositionCount();
         ColumnarRow columnarRow = toColumnarRow(rleValue);
 
         Block[] fields = new Block[columnarRow.getFieldCount()];
+        long averageRowSize = 0;
         for (int i = 0; i < columnarRow.getFieldCount(); i++) {
             Block nullSuppressedField = columnarRow.getField(i);
             if (rleValue.isNull(0)) {
@@ -96,16 +118,28 @@ public final class ColumnarRow
                 fields[i] = nullSuppressedField;
             }
             else {
-                fields[i] = new RunLengthEncodedBlock(nullSuppressedField, rleBlock.getPositionCount());
+                fields[i] = new RunLengthEncodedBlock(nullSuppressedField, positionCount);
+                averageRowSize += nullSuppressedField.getSizeInBytes() / nullSuppressedField.getPositionCount();
             }
         }
-        return new ColumnarRow(rleBlock, fields);
+        return new ColumnarRow(
+                rleBlock,
+                fields,
+                INSTANCE_SIZE + rleBlock.getRetainedSizeInBytes(),
+                // The estimated serialized size is the sum of the following:
+                // 1) the offsets size: Integer.BYTES * positionCount. Note that even though ColumnarRow doesn't have the offsets array, the serialized RowBlock still has it. Please see RowBlockEncodingBuffer.
+                // 2) nulls array size: Byte.BYTES * positionCount
+                // 3) the estimated serialized size for the fields Blocks which were just constructed as new RunLengthEncodedBlocks:
+                //     the average row size: averageRowSize * the number of rows: positionCount
+                (Integer.BYTES + Byte.BYTES) * positionCount + averageRowSize * positionCount);
     }
 
-    private ColumnarRow(Block nullCheckBlock, Block[] fields)
+    private ColumnarRow(Block nullCheckBlock, Block[] fields, long retainedSizeInBytes, long estimatedSerializedSizeInBytes)
     {
         this.nullCheckBlock = nullCheckBlock;
         this.fields = fields.clone();
+        this.retainedSizeInBytes = retainedSizeInBytes;
+        this.estimatedSerializedSizeInBytes = estimatedSerializedSizeInBytes;
     }
 
     public int getPositionCount()
@@ -147,11 +181,12 @@ public final class ColumnarRow
 
     public long getRetainedSizeInBytes()
     {
-        int fieldsRetainedSize = 0;
-        for (int i = 0; i < fields.length; i++) {
-            fieldsRetainedSize += fields[i].getRetainedSizeInBytes();
-        }
-        return nullCheckBlock.getRetainedSizeInBytes() + fieldsRetainedSize;
+        return retainedSizeInBytes;
+    }
+
+    public long getEstimatedSerializedSizeInBytes()
+    {
+        return estimatedSerializedSizeInBytes;
     }
 
     @Override

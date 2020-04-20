@@ -15,26 +15,28 @@ package com.facebook.presto.operator.unnest;
 
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.ColumnarArray;
-import com.facebook.presto.spi.type.Type;
+import org.openjdk.jol.info.ClassLayout;
 
+import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.spi.block.ColumnarArray.toColumnarArray;
-import static com.google.common.base.Preconditions.checkState;
+import static io.airlift.slice.SizeOf.sizeOf;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Unnester for a nested column with array type, only when array elements are NOT of type {@code RowType}.
  * Maintains a {@link ColumnarArray} object to get underlying elements block from the array block.
- *
+ * <p>
  * All protected methods implemented here assume that they are being invoked when {@code columnarArray} is non-null.
  */
 class ArrayUnnester
-        extends Unnester
+        implements Unnester
 {
-    private ColumnarArray columnarArray;
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ArrayUnnester.class).instanceSize();
 
-    public ArrayUnnester(Type elementType)
-    {
-        super(elementType);
-    }
+    private final UnnestBlockBuilder unnestBlockBuilder = new UnnestBlockBuilder();
+
+    private int[] lengths = new int[0];
+    private ColumnarArray columnarArray;
 
     @Override
     public int getChannelCount()
@@ -43,44 +45,46 @@ class ArrayUnnester
     }
 
     @Override
-    protected int getInputEntryCount()
+    public void resetInput(Block block)
     {
-        if (columnarArray == null) {
-            return 0;
-        }
-        return columnarArray.getPositionCount();
-    }
+        requireNonNull(block, "block is null");
 
-    @Override
-    protected void resetColumnarStructure(Block block)
-    {
-        this.columnarArray = toColumnarArray(block);
-    }
+        columnarArray = toColumnarArray(block);
+        unnestBlockBuilder.resetInputBlock(columnarArray.getElementsBlock());
 
-    @Override
-    protected Block getElementsBlock(int channel)
-    {
-        checkState(channel == 0, "index is not 0");
-        return columnarArray.getElementsBlock();
-    }
-
-    @Override
-    protected void processCurrentPosition(int requiredOutputCount)
-    {
-        // Translate indices
-        int startElementIndex = columnarArray.getOffset(getCurrentPosition());
-        int length = columnarArray.getLength(getCurrentPosition());
-
-        // Append elements and nulls
-        getBlockBuilder(0).appendRange(startElementIndex, length);
-        for (int i = 0; i < requiredOutputCount - length; i++) {
-            getBlockBuilder(0).appendNull();
+        int positionCount = block.getPositionCount();
+        lengths = ensureCapacity(lengths, positionCount);
+        for (int i = 0; i < positionCount; i++) {
+            lengths[i] = columnarArray.getLength(i);
         }
     }
 
     @Override
-    protected int getElementsLength(int index)
+    public int[] getLengths()
     {
-        return columnarArray.getLength(index);
+        return lengths;
+    }
+
+    @Override
+    public Block[] buildOutputBlocks(int[] maxLengths, int startPosition, int batchSize, int currentBatchTotalLength)
+    {
+        boolean nullRequired = (columnarArray.getOffset(startPosition + batchSize) - columnarArray.getOffset(startPosition)) < currentBatchTotalLength;
+
+        Block[] outputBlocks = new Block[1];
+        if (nullRequired) {
+            outputBlocks[0] = unnestBlockBuilder.buildOutputBlockWithNulls(maxLengths, startPosition, batchSize, currentBatchTotalLength, this.lengths);
+        }
+        else {
+            outputBlocks[0] = unnestBlockBuilder.buildOutputBlockWithoutNulls(currentBatchTotalLength);
+        }
+
+        return outputBlocks;
+    }
+
+    @Override
+    public long getRetainedSizeInBytes()
+    {
+        // The lengths array in unnestBlockBuilders is the same object as in the unnester and doesn't need to be counted again.
+        return INSTANCE_SIZE + sizeOf(lengths);
     }
 }

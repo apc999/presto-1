@@ -16,13 +16,12 @@ package com.facebook.presto.operator.unnest;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.ColumnarArray;
 import com.facebook.presto.spi.block.ColumnarRow;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.Type;
-import com.google.common.collect.Iterables;
+import org.openjdk.jol.info.ClassLayout;
 
+import static com.facebook.presto.array.Arrays.ensureCapacity;
 import static com.facebook.presto.spi.block.ColumnarArray.toColumnarArray;
 import static com.facebook.presto.spi.block.ColumnarRow.toColumnarRow;
-import static com.google.common.base.Preconditions.checkState;
+import static io.airlift.slice.SizeOf.sizeOf;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -30,26 +29,26 @@ import static java.util.Objects.requireNonNull;
  * It maintains {@link ColumnarArray} and {@link ColumnarRow} objects to get underlying elements. The two
  * different columnar structures are required because there are two layers of translation involved. One
  * from {@code ArrayBlock} to {@code RowBlock}, and then from {@code RowBlock} to individual element blocks.
- *
+ * <p>
  * All protected methods implemented here assume that they are invoked when {@code columnarArray} and
  * {@code columnarRow} are non-null.
  */
 class ArrayOfRowsUnnester
-        extends Unnester
+        implements Unnester
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ArrayOfRowsUnnester.class).instanceSize();
+
+    private final int fieldCount;
+    private final UnnestBlockBuilder[] unnestBlockBuilders;
+
+    private int[] lengths = new int[0];
     private ColumnarArray columnarArray;
     private ColumnarRow columnarRow;
-    private final int fieldCount;
 
-    // Keeping track of null row element count is required. This count needs to be deducted
-    // when translating row block indexes to element block indexes.
-    private int nullRowsEncountered;
-
-    public ArrayOfRowsUnnester(RowType elementType)
+    public ArrayOfRowsUnnester(int fieldCount)
     {
-        super(Iterables.toArray(requireNonNull(elementType, "elementType is null").getTypeParameters(), Type.class));
-        this.fieldCount = elementType.getTypeParameters().size();
-        this.nullRowsEncountered = 0;
+        unnestBlockBuilders = createUnnestBlockBuilder(fieldCount);
+        this.fieldCount = fieldCount;
     }
 
     @Override
@@ -59,62 +58,83 @@ class ArrayOfRowsUnnester
     }
 
     @Override
-    int getInputEntryCount()
+    public void resetInput(Block block)
     {
-        if (columnarArray == null) {
-            return 0;
-        }
-        return columnarArray.getPositionCount();
-    }
+        requireNonNull(block, "block is null");
 
-    @Override
-    protected void resetColumnarStructure(Block block)
-    {
         columnarArray = toColumnarArray(block);
         columnarRow = toColumnarRow(columnarArray.getElementsBlock());
-        nullRowsEncountered = 0;
+
+        for (int i = 0; i < fieldCount; i++) {
+            unnestBlockBuilders[i].resetInputBlock(columnarRow.getField(i), columnarRow.getNullCheckBlock());
+        }
+
+        int positionCount = block.getPositionCount();
+        lengths = ensureCapacity(lengths, positionCount);
+        for (int j = 0; j < positionCount; j++) {
+            lengths[j] = columnarArray.getLength(j);
+        }
     }
 
     @Override
-    public void processCurrentPosition(int requireCount)
+    public int[] getLengths()
     {
-        // Translate to row block index
-        int rowBlockIndex = columnarArray.getOffset(getCurrentPosition());
+        return lengths;
+    }
 
-        // Unnest current entry
-        for (int i = 0; i < getCurrentUnnestedLength(); i++) {
-            if (columnarRow.isNull(rowBlockIndex + i)) {
-                // Nulls have to be appended when Row element itself is null
-                for (int field = 0; field < fieldCount; field++) {
-                    getBlockBuilder(field).appendNull();
-                }
-                nullRowsEncountered++;
+    @Override
+    public Block[] buildOutputBlocks(int[] maxLengths, int startPosition, int batchSize, int currentBatchTotalLength)
+    {
+        boolean nullRequired = needToInsertNulls(startPosition, batchSize, currentBatchTotalLength);
+
+        Block[] outputBlocks = new Block[fieldCount];
+        for (int i = 0; i < fieldCount; i++) {
+            if (nullRequired) {
+                outputBlocks[i] = unnestBlockBuilders[i].buildOutputBlockWithNulls(maxLengths, startPosition, batchSize, currentBatchTotalLength, this.lengths);
             }
             else {
-                for (int field = 0; field < fieldCount; field++) {
-                    getBlockBuilder(field).appendElement(rowBlockIndex + i - nullRowsEncountered);
+                outputBlocks[i] = unnestBlockBuilders[i].buildOutputBlockWithoutNulls(currentBatchTotalLength);
+            }
+        }
+        return outputBlocks;
+    }
+
+    @Override
+    public long getRetainedSizeInBytes()
+    {
+        // The lengths array in unnestBlockBuilders is the same object as in the unnester and doesn't need to be counted again.
+        return INSTANCE_SIZE + sizeOf(lengths);
+    }
+
+    private static UnnestBlockBuilder[] createUnnestBlockBuilder(int fieldCount)
+    {
+        UnnestBlockBuilder[] builders = new UnnestBlockBuilder[fieldCount];
+
+        for (int i = 0; i < fieldCount; i++) {
+            builders[i] = new UnnestBlockBuilder();
+        }
+
+        return builders;
+    }
+
+    private boolean needToInsertNulls(int offset, int length, int currentBatchTotalLength)
+    {
+        int start = columnarArray.getOffset(offset);
+        int end = columnarArray.getOffset(offset + length);
+        int totalLength = end - start;
+
+        if (totalLength < currentBatchTotalLength) {
+            return true;
+        }
+
+        if (columnarRow.getNullCheckBlock().mayHaveNull()) {
+            for (int i = start; i < end; i++) {
+                if (columnarRow.isNull(i)) {
+                    return true;
                 }
             }
         }
 
-        // Append nulls if more output entries are needed
-        for (int i = 0; i < requireCount - getCurrentUnnestedLength(); i++) {
-            for (int field = 0; field < fieldCount; field++) {
-                getBlockBuilder(field).appendNull();
-            }
-        }
-    }
-
-    @Override
-    protected Block getElementsBlock(int channel)
-    {
-        checkState(channel >= 0 && channel < fieldCount, "Invalid channel number");
-        return columnarRow.getField(channel);
-    }
-
-    @Override
-    protected int getElementsLength(int index)
-    {
-        return columnarArray.getLength(index);
+        return false;
     }
 }

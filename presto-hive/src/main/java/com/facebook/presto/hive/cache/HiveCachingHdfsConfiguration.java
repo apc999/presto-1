@@ -21,6 +21,7 @@ import com.facebook.presto.cache.alluxio.CacheFactory;
 import com.facebook.presto.hadoop.FileSystemFactory;
 import com.facebook.presto.hive.HdfsConfiguration;
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import com.facebook.presto.spi.PrestoException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -36,6 +37,7 @@ import java.util.function.BiFunction;
 import static com.facebook.presto.cache.CacheType.ALLUXIO;
 import static com.facebook.presto.hive.util.ConfigurationUtils.copy;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
 public class HiveCachingHdfsConfiguration
@@ -66,7 +68,8 @@ public class HiveCachingHdfsConfiguration
         Configuration config = new CachingJobConf((factoryConfig, factoryUri) -> {
             try {
                 FileSystem fileSystem = (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri));
-                FileSystem dataTierFileSystem = fileSystem;
+                checkState(fileSystem instanceof ExtendedFileSystem);
+                ExtendedFileSystem dataTierFileSystem = (ExtendedFileSystem) fileSystem;
                 if (cacheConfig.isCachingEnabled() && cacheConfig.getCacheType() == ALLUXIO) {
                     dataTierFileSystem = cacheFactory.createCachingFileSystem(factoryConfig, factoryUri, fileSystem);
                 }

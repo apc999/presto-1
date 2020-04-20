@@ -15,6 +15,7 @@ package com.facebook.presto.pinot;
 
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.type.Type;
+import com.google.common.collect.ImmutableMap;
 
 import java.util.Objects;
 
@@ -27,9 +28,9 @@ public class PinotColumnMetadata
     // We need to preserve the case sensitivity of the column, store it here as the super class stores the value after lower-casing it
     private final String name;
 
-    public PinotColumnMetadata(String name, Type type)
+    public PinotColumnMetadata(String name, Type type, boolean inNullable, String comment)
     {
-        super(requireNonNull(name, "name is null"), requireNonNull(type, "type is null"));
+        super(requireNonNull(name, "name is null"), requireNonNull(type, "type is null"), inNullable, comment, null, false, ImmutableMap.of());
         this.name = name;
     }
 
