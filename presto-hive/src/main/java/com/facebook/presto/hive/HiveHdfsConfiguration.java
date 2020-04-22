@@ -67,7 +67,6 @@ public class HiveHdfsConfiguration
         for (DynamicConfigurationProvider provider : dynamicProviders) {
             provider.updateConfiguration(config, context, uri);
         }
-
         return config;
     }
 }

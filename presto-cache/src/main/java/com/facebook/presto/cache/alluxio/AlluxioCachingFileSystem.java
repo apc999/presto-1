@@ -14,14 +14,12 @@
 package com.facebook.presto.cache.alluxio;
 
 import alluxio.AlluxioURI;
-import alluxio.client.file.URIStatus;
 import alluxio.client.file.cache.LocalCacheFileSystem;
 import alluxio.conf.AlluxioConfiguration;
 import alluxio.conf.AlluxioProperties;
 import alluxio.conf.InstancedConfiguration;
 import alluxio.conf.PropertyKey;
 import alluxio.conf.Source;
-import alluxio.hadoop.AbstractFileSystem;
 import alluxio.hadoop.HadoopConfigurationUtils;
 import alluxio.metrics.MetricsConfig;
 import alluxio.metrics.MetricsSystem;
@@ -29,18 +27,32 @@ import alluxio.uri.MultiMasterAuthority;
 import alluxio.uri.SingleMasterAuthority;
 import alluxio.uri.ZookeeperAuthority;
 import alluxio.util.ConfigurationUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 
+import com.facebook.presto.hive.HiveFileContext;
+import com.facebook.presto.hive.HiveFileInfo;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.util.Progressable;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
 public class AlluxioCachingFileSystem
-        extends AbstractFileSystem
+        extends ExtendedFileSystem
 {
+    private alluxio.hadoop.FileSystem cachingFs;
     private final FileSystem fileSystem;
     private final Configuration configuration;
     private final CacheFactory cacheFactory;
@@ -50,25 +62,21 @@ public class AlluxioCachingFileSystem
         this.fileSystem = fileSystem;
         this.configuration = configuration;
         this.cacheFactory = cacheFactory;
-        initialize(uri, configuration);
     }
 
     @Override
     public synchronized void initialize(URI uri, Configuration conf)
+        throws IOException
     {
-        // Set statistics
-        setConf(conf);
-        statistics = getStatistics(uri.getScheme(), getClass());
+        super.initialize(uri, conf);
 
         // Take the URI properties, hadoop configuration, and given Alluxio configuration and merge
         // all three into a single object.
-        Map<String, Object> uriConfProperties = getConfigurationFromUri(uri);
         AlluxioProperties alluxioProps = ConfigurationUtils.defaults();
         InstancedConfiguration newConf = HadoopConfigurationUtils.mergeHadoopConfiguration(conf,
                 alluxioProps);
         // Connection details in the URI has the highest priority
-        newConf.merge(uriConfProperties, Source.RUNTIME);
-        mAlluxioConf = newConf;
+        newConf.merge(getConfigurationFromUri(uri), Source.RUNTIME);
 
         // Handle metrics
         Properties metricsProps = new Properties();
@@ -76,7 +84,12 @@ public class AlluxioCachingFileSystem
             metricsProps.setProperty(e.getKey(), e.getValue());
         }
         MetricsSystem.startSinksFromConfig(new MetricsConfig(metricsProps));
-        mFileSystem = new LocalCacheFileSystem(cacheFactory.getAlluxioCachingClientFileSystem(fileSystem, mAlluxioConf), mAlluxioConf);
+        LocalCacheFileSystem localCacheSystem =
+            new LocalCacheFileSystem(cacheFactory.getAlluxioCachingClientFileSystem(fileSystem,
+                newConf), newConf);
+
+        this.cachingFs = new alluxio.hadoop.FileSystem(localCacheSystem);
+        cachingFs.initialize(uri, conf);
     }
 
     private AlluxioCachingClientFileSystem getAlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration)
@@ -87,17 +100,66 @@ public class AlluxioCachingFileSystem
     @Override
     public String getScheme()
     {
-        return fileSystem.getScheme();
+        return cachingFs.getScheme();
     }
 
     @Override
-    protected boolean isZookeeperMode()
-    {
-        return this.mFileSystem.getConf().getBoolean(PropertyKey.ZOOKEEPER_ENABLED);
+    public URI getUri() {
+        return cachingFs.getUri();
     }
 
     @Override
-    protected Map<String, Object> getConfigurationFromUri(URI uri)
+    public FSDataInputStream open(Path f, int bufferSize) throws IOException {
+        return cachingFs.open(f, bufferSize);
+    }
+
+    @Override
+    public FSDataOutputStream create(Path f, FsPermission permission, boolean overwrite, int bufferSize, short replication, long blockSize, Progressable progress) throws IOException {
+        return cachingFs.create(f, permission,
+            overwrite, bufferSize, replication, blockSize, progress);
+    }
+
+    @Override
+    public FSDataOutputStream append(Path f, int bufferSize, Progressable progress) throws IOException {
+        return cachingFs.append(f, bufferSize, progress);
+    }
+
+    @Override
+    public boolean rename(Path src, Path dst) throws IOException {
+        return cachingFs.rename(src, dst);
+    }
+
+    @Override
+    public boolean delete(Path f, boolean recursive) throws IOException {
+        return cachingFs.delete(f, recursive);
+    }
+
+    @Override
+    public FileStatus[] listStatus(Path f) throws FileNotFoundException, IOException {
+        return cachingFs.listStatus(f);
+    }
+
+    @Override
+    public void setWorkingDirectory(Path new_dir) {
+        cachingFs.setWorkingDirectory(new_dir);
+    }
+
+    @Override
+    public Path getWorkingDirectory() {
+        return cachingFs.getWorkingDirectory();
+    }
+
+    @Override
+    public boolean mkdirs(Path f, FsPermission permission) throws IOException {
+        return cachingFs.mkdirs(f, permission);
+    }
+
+    @Override
+    public FileStatus getFileStatus(Path f) throws IOException {
+        return cachingFs.getFileStatus(f);
+    }
+
+    static Map<String, Object> getConfigurationFromUri(URI uri)
     {
         AlluxioURI alluxioUri = new AlluxioURI(uri.toString());
         Map<String, Object> alluxioConfProperties = new HashMap<>();
@@ -131,25 +193,17 @@ public class AlluxioCachingFileSystem
     }
 
     @Override
-    protected void validateFsUri(URI fsUri)
-    {
+    public FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext) throws Exception {
+        return cachingFs.open(path);
     }
 
     @Override
-    protected String getFsScheme(URI fsUri)
-    {
-        return getScheme();
+    public RemoteIterator<HiveFileInfo> listFiles(Path path) throws IOException {
+        throw new UnsupportedOperationException();
     }
 
     @Override
-    protected AlluxioURI getAlluxioPath(Path path)
-    {
-        return new AlluxioURI(path.toString());
-    }
-
-    @Override
-    protected Path getFsPath(String fsUriHeader, URIStatus fileStatus)
-    {
-        return new Path(fsUriHeader + fileStatus.getPath());
+    public RemoteIterator<LocatedFileStatus> listDirectory(Path path) throws IOException {
+        throw new UnsupportedOperationException();
     }
 }

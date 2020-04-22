@@ -14,6 +14,8 @@
 package com.facebook.presto.cache.alluxio;
 
 import alluxio.conf.AlluxioConfiguration;
+
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 
@@ -23,7 +25,7 @@ public class HiveCacheFactory
         implements CacheFactory
 {
     @Override
-    public FileSystem createCachingFileSystem(Configuration configuration, URI uri, FileSystem fileSystem)
+    public ExtendedFileSystem createCachingFileSystem(Configuration configuration, URI uri, FileSystem fileSystem)
     {
         return new AlluxioCachingFileSystem(configuration, uri, fileSystem, this);
     }
