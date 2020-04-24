@@ -14,7 +14,6 @@
 package com.facebook.presto.cache.alluxio;
 
 import alluxio.conf.AlluxioConfiguration;
-
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -23,7 +22,7 @@ import java.net.URI;
 
 public interface CacheFactory
 {
-    ExtendedFileSystem createCachingFileSystem(Configuration factoryConfig, URI factoryUri,
-                                               FileSystem fileSystem);
+    ExtendedFileSystem createCachingFileSystem(Configuration factoryConfig, URI factoryUri, FileSystem fileSystem);
+
     AlluxioCachingClientFileSystem getAlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration);
 }

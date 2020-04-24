@@ -59,7 +59,7 @@ public class AlluxioCachingClientFileSystem
         implements alluxio.client.file.FileSystem
 {
     private final AlluxioConfiguration alluxioConfiguration;
-    protected final org.apache.hadoop.fs.FileSystem fileSystem;
+    protected final FileSystem fileSystem;
 
     public AlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration)
     {

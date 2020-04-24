@@ -27,7 +27,6 @@ import alluxio.uri.MultiMasterAuthority;
 import alluxio.uri.SingleMasterAuthority;
 import alluxio.uri.ZookeeperAuthority;
 import alluxio.util.ConfigurationUtils;
-
 import com.facebook.presto.hive.HiveFileContext;
 import com.facebook.presto.hive.HiveFileInfo;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -66,7 +65,7 @@ public class AlluxioCachingFileSystem
 
     @Override
     public synchronized void initialize(URI uri, Configuration conf)
-        throws IOException
+            throws IOException
     {
         super.initialize(uri, conf);
 
@@ -85,8 +84,7 @@ public class AlluxioCachingFileSystem
         }
         MetricsSystem.startSinksFromConfig(new MetricsConfig(metricsProps));
         LocalCacheFileSystem localCacheSystem =
-            new LocalCacheFileSystem(cacheFactory.getAlluxioCachingClientFileSystem(fileSystem,
-                newConf), newConf);
+                new LocalCacheFileSystem(cacheFactory.getAlluxioCachingClientFileSystem(fileSystem, newConf), newConf);
 
         this.cachingFs = new alluxio.hadoop.FileSystem(localCacheSystem);
         cachingFs.initialize(uri, conf);
@@ -104,58 +102,77 @@ public class AlluxioCachingFileSystem
     }
 
     @Override
-    public URI getUri() {
+    public URI getUri()
+    {
         return cachingFs.getUri();
     }
 
     @Override
-    public FSDataInputStream open(Path f, int bufferSize) throws IOException {
+    public FSDataInputStream open(Path f, int bufferSize)
+            throws IOException
+    {
         return cachingFs.open(f, bufferSize);
     }
 
     @Override
-    public FSDataOutputStream create(Path f, FsPermission permission, boolean overwrite, int bufferSize, short replication, long blockSize, Progressable progress) throws IOException {
+    public FSDataOutputStream create(Path f, FsPermission permission, boolean overwrite, int bufferSize, short replication, long blockSize, Progressable progress)
+            throws IOException
+    {
         return cachingFs.create(f, permission,
-            overwrite, bufferSize, replication, blockSize, progress);
+                overwrite, bufferSize, replication, blockSize, progress);
     }
 
     @Override
-    public FSDataOutputStream append(Path f, int bufferSize, Progressable progress) throws IOException {
+    public FSDataOutputStream append(Path f, int bufferSize, Progressable progress)
+            throws IOException
+    {
         return cachingFs.append(f, bufferSize, progress);
     }
 
     @Override
-    public boolean rename(Path src, Path dst) throws IOException {
+    public boolean rename(Path src, Path dst)
+            throws IOException
+    {
         return cachingFs.rename(src, dst);
     }
 
     @Override
-    public boolean delete(Path f, boolean recursive) throws IOException {
+    public boolean delete(Path f, boolean recursive)
+            throws IOException
+    {
         return cachingFs.delete(f, recursive);
     }
 
     @Override
-    public FileStatus[] listStatus(Path f) throws FileNotFoundException, IOException {
+    public FileStatus[] listStatus(Path f)
+            throws FileNotFoundException, IOException
+    {
         return cachingFs.listStatus(f);
     }
 
     @Override
-    public void setWorkingDirectory(Path new_dir) {
-        cachingFs.setWorkingDirectory(new_dir);
+    public void setWorkingDirectory(Path workingDirectory)
+    {
+        cachingFs.setWorkingDirectory(workingDirectory);
     }
 
     @Override
-    public Path getWorkingDirectory() {
+    public Path getWorkingDirectory()
+    {
         return cachingFs.getWorkingDirectory();
     }
 
     @Override
-    public boolean mkdirs(Path f, FsPermission permission) throws IOException {
+    public boolean mkdirs(Path f, FsPermission permission)
+            throws IOException
+    {
         return cachingFs.mkdirs(f, permission);
     }
 
     @Override
-    public FileStatus getFileStatus(Path f) throws IOException {
+    public FileStatus getFileStatus(Path f)
+            throws IOException
+    {
         return cachingFs.getFileStatus(f);
     }
 
@@ -193,17 +210,23 @@ public class AlluxioCachingFileSystem
     }
 
     @Override
-    public FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext) throws Exception {
+    public FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext)
+            throws Exception
+    {
         return cachingFs.open(path);
     }
 
     @Override
-    public RemoteIterator<HiveFileInfo> listFiles(Path path) throws IOException {
+    public RemoteIterator<HiveFileInfo> listFiles(Path path)
+            throws IOException
+    {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public RemoteIterator<LocatedFileStatus> listDirectory(Path path) throws IOException {
+    public RemoteIterator<LocatedFileStatus> listDirectory(Path path)
+            throws IOException
+    {
         throw new UnsupportedOperationException();
     }
 }

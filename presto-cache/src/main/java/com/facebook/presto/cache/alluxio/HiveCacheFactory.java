@@ -14,7 +14,6 @@
 package com.facebook.presto.cache.alluxio;
 
 import alluxio.conf.AlluxioConfiguration;
-
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
