@@ -26,8 +26,47 @@ public class CacheConfig
     private boolean cachingEnabled;
     private CacheType cacheType;
     private URI baseDirectory;
-    private DataSize maxInMemoryCacheSize = new DataSize(2, GIGABYTE);
     private boolean validationEnabled;
+    private DataSize maxInMemoryCacheSize = new DataSize(2, GIGABYTE);
+
+    public URI getBaseDirectory()
+    {
+        return baseDirectory;
+    }
+
+    @Config("cache.base-directory")
+    @ConfigDescription("Base URI to cache data")
+    public CacheConfig setBaseDirectory(URI dataURI)
+    {
+        this.baseDirectory = dataURI;
+        return this;
+    }
+
+    public boolean isValidationEnabled()
+    {
+        return validationEnabled;
+    }
+
+    @Config("cache.validation-enabled")
+    @ConfigDescription("Enable cache validation by comparing with actual data with cached data")
+    public CacheConfig setValidationEnabled(boolean validationEnabled)
+    {
+        this.validationEnabled = validationEnabled;
+        return this;
+    }
+
+    public DataSize getMaxInMemoryCacheSize()
+    {
+        return maxInMemoryCacheSize;
+    }
+
+    @Config("cache.max-in-memory-cache-size")
+    @ConfigDescription("The maximum cache size allowed in memory")
+    public CacheConfig setMaxInMemoryCacheSize(DataSize maxInMemoryCacheSize)
+    {
+        this.maxInMemoryCacheSize = maxInMemoryCacheSize;
+        return this;
+    }
 
     @Config("cache.enabled")
     @ConfigDescription("Is cache enabled")
@@ -53,45 +92,6 @@ public class CacheConfig
     public CacheType getCacheType()
     {
         return cacheType;
-    }
-
-    @Config("cache.base-directory")
-    @ConfigDescription("Base URI to cache data")
-    public CacheConfig setBaseDirectory(URI dataURI)
-    {
-        this.baseDirectory = dataURI;
-        return this;
-    }
-
-    public URI getBaseDirectory()
-    {
-        return baseDirectory;
-    }
-
-    public DataSize getMaxInMemoryCacheSize()
-    {
-        return maxInMemoryCacheSize;
-    }
-
-    @Config("cache.max-in-memory-cache-size")
-    @ConfigDescription("The maximum cache size allowed in memory")
-    public CacheConfig setMaxInMemoryCacheSize(DataSize maxInMemoryCacheSize)
-    {
-        this.maxInMemoryCacheSize = maxInMemoryCacheSize;
-        return this;
-    }
-
-    public boolean isValidationEnabled()
-    {
-        return validationEnabled;
-    }
-
-    @Config("cache.validation-enabled")
-    @ConfigDescription("Enable cache validation by comparing with actual data with cached data")
-    public CacheConfig setValidationEnabled(boolean validationEnabled)
-    {
-        this.validationEnabled = validationEnabled;
-        return this;
     }
 
     @Override
