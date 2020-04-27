@@ -22,7 +22,7 @@ import com.facebook.presto.cache.CacheStats;
 import com.facebook.presto.cache.ForCachingFileSystem;
 import com.facebook.presto.cache.NoOpCacheManager;
 import com.facebook.presto.cache.alluxio.AlluxioCacheConfig;
-import com.facebook.presto.cache.alluxio.CacheFactory;
+import com.facebook.presto.cache.CacheFactory;
 import com.facebook.presto.cache.alluxio.HiveCacheFactory;
 import com.facebook.presto.cache.localrange.LocalRangeCacheConfig;
 import com.facebook.presto.cache.localrange.LocalRangeCacheManager;

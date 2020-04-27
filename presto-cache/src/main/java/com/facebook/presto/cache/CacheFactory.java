@@ -11,18 +11,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.cache.alluxio;
+package com.facebook.presto.cache;
 
-import alluxio.conf.AlluxioConfiguration;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 
 import java.net.URI;
 
 public interface CacheFactory
 {
-    ExtendedFileSystem createCachingFileSystem(Configuration factoryConfig, URI factoryUri, FileSystem fileSystem);
-
-    AlluxioCachingClientFileSystem getAlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration);
+    CachingFileSystem createCachingFileSystem(Configuration factoryConfig, URI factoryUri,
+                                              ExtendedFileSystem fileSystem,
+                                              CacheManager cacheManager, CacheConfig cacheConfig);
 }

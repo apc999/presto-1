@@ -13,25 +13,33 @@
  */
 package com.facebook.presto.cache.alluxio;
 
-import alluxio.conf.AlluxioConfiguration;
+import com.facebook.presto.cache.CacheConfig;
+import com.facebook.presto.cache.CacheFactory;
+import com.facebook.presto.cache.CacheManager;
+import com.facebook.presto.cache.CachingFileSystem;
+import com.facebook.presto.cache.basic.BasicCachingFileSystem;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 
 import java.net.URI;
+
+import static com.facebook.presto.cache.CacheType.ALLUXIO;
 
 public class HiveCacheFactory
         implements CacheFactory
 {
     @Override
-    public ExtendedFileSystem createCachingFileSystem(Configuration configuration, URI uri, FileSystem fileSystem)
+    public CachingFileSystem createCachingFileSystem(Configuration configuration, URI uri,
+            ExtendedFileSystem fileSystem, CacheManager cacheManager, CacheConfig cacheConfig)
     {
-        return new AlluxioCachingFileSystem(configuration, uri, fileSystem, this);
-    }
-
-    @Override
-    public AlluxioCachingClientFileSystem getAlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration)
-    {
-        return new AlluxioCachingClientFileSystem(fileSystem, alluxioConfiguration);
+        if (cacheConfig.isCachingEnabled() && cacheConfig.getCacheType() == ALLUXIO) {
+            return new AlluxioCachingFileSystem(configuration, uri, fileSystem, this);
+        }
+        return new BasicCachingFileSystem(
+            uri,
+            configuration,
+            cacheManager,
+            fileSystem,
+            cacheConfig.isValidationEnabled());
     }
 }

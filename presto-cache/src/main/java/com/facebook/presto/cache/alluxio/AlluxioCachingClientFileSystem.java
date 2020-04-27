@@ -39,10 +39,10 @@ import alluxio.wire.BlockLocationInfo;
 import alluxio.wire.FileInfo;
 import alluxio.wire.MountPointInfo;
 import alluxio.wire.SyncPointInfo;
+import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 
@@ -59,9 +59,10 @@ public class AlluxioCachingClientFileSystem
         implements alluxio.client.file.FileSystem
 {
     private final AlluxioConfiguration alluxioConfiguration;
-    protected final FileSystem fileSystem;
+    protected final ExtendedFileSystem fileSystem;
 
-    public AlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration)
+    public AlluxioCachingClientFileSystem(ExtendedFileSystem fileSystem,
+                                          AlluxioConfiguration alluxioConfiguration)
     {
         this.fileSystem = fileSystem;
         this.alluxioConfiguration = alluxioConfiguration;

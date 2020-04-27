@@ -15,9 +15,9 @@ package com.facebook.presto.hive.cache;
 
 import com.facebook.presto.cache.CacheConfig;
 import com.facebook.presto.cache.CacheManager;
-import com.facebook.presto.cache.CachingFileSystem;
+import com.facebook.presto.cache.basic.BasicCachingFileSystem;
 import com.facebook.presto.cache.ForCachingFileSystem;
-import com.facebook.presto.cache.alluxio.CacheFactory;
+import com.facebook.presto.cache.CacheFactory;
 import com.facebook.presto.hadoop.FileSystemFactory;
 import com.facebook.presto.hive.HdfsConfiguration;
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
@@ -69,15 +69,8 @@ public class HiveCachingHdfsConfiguration
             try {
                 FileSystem fileSystem = (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri));
                 checkState(fileSystem instanceof ExtendedFileSystem);
-                if (cacheConfig.isCachingEnabled() && cacheConfig.getCacheType() == ALLUXIO) {
-                    return cacheFactory.createCachingFileSystem(factoryConfig, factoryUri, fileSystem);
-                }
-                return new CachingFileSystem(
-                        factoryUri,
-                        factoryConfig,
-                        cacheManager,
-                        (ExtendedFileSystem) fileSystem,
-                        cacheConfig.isValidationEnabled());
+                return cacheFactory.createCachingFileSystem(factoryConfig, factoryUri,
+                        (ExtendedFileSystem) fileSystem, cacheManager, cacheConfig);
             }
             catch (IOException e) {
                 throw new PrestoException(GENERIC_INTERNAL_ERROR, "cannot create caching file system", e);

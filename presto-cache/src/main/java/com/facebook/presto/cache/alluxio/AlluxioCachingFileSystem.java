@@ -26,6 +26,8 @@ import alluxio.uri.MultiMasterAuthority;
 import alluxio.uri.SingleMasterAuthority;
 import alluxio.uri.ZookeeperAuthority;
 import alluxio.util.ConfigurationUtils;
+import com.facebook.presto.cache.CacheFactory;
+import com.facebook.presto.cache.CachingFileSystem;
 import com.facebook.presto.hive.HiveFileContext;
 import com.facebook.presto.hive.HiveFileInfo;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -33,7 +35,6 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
@@ -50,14 +51,14 @@ import java.util.Properties;
 import static java.util.Objects.requireNonNull;
 
 public class AlluxioCachingFileSystem
-        extends ExtendedFileSystem
+        extends CachingFileSystem
 {
     private alluxio.hadoop.FileSystem cachingFs;
-    private final FileSystem fileSystem;
+    private final ExtendedFileSystem fileSystem;
     private final Configuration configuration;
     private final CacheFactory cacheFactory;
 
-    public AlluxioCachingFileSystem(Configuration configuration, URI uri, FileSystem fileSystem, CacheFactory cacheFactory)
+    public AlluxioCachingFileSystem(Configuration configuration, URI uri, ExtendedFileSystem fileSystem, CacheFactory cacheFactory)
     {
         this.fileSystem = fileSystem;
         this.configuration = configuration;
@@ -86,8 +87,8 @@ public class AlluxioCachingFileSystem
             metricsProps.setProperty(e.getKey(), e.getValue());
         }
         MetricsSystem.startSinksFromConfig(new MetricsConfig(metricsProps));
-        LocalCacheFileSystem localCacheSystem =
-                new LocalCacheFileSystem(cacheFactory.getAlluxioCachingClientFileSystem(fileSystem, newConf), newConf);
+        LocalCacheFileSystem localCacheSystem = new LocalCacheFileSystem(
+                new AlluxioCachingClientFileSystem(fileSystem, newConf), newConf);
 
         this.cachingFs = new alluxio.hadoop.FileSystem(localCacheSystem);
         cachingFs.initialize(uri, conf);

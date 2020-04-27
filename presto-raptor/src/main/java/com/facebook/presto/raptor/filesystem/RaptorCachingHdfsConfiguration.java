@@ -15,7 +15,7 @@ package com.facebook.presto.raptor.filesystem;
 
 import com.facebook.presto.cache.CacheConfig;
 import com.facebook.presto.cache.CacheManager;
-import com.facebook.presto.cache.CachingFileSystem;
+import com.facebook.presto.cache.basic.BasicCachingFileSystem;
 import com.facebook.presto.cache.ForCachingFileSystem;
 import com.facebook.presto.hadoop.FileSystemFactory;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -62,7 +62,7 @@ public class RaptorCachingHdfsConfiguration
             try {
                 FileSystem fileSystem = (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri));
                 checkState(fileSystem instanceof ExtendedFileSystem);
-                return new CachingFileSystem(
+                return new BasicCachingFileSystem(
                         factoryUri,
                         factoryConfig,
                         cacheManager,
