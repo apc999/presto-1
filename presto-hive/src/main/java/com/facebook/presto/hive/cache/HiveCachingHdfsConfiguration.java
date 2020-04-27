@@ -69,15 +69,14 @@ public class HiveCachingHdfsConfiguration
             try {
                 FileSystem fileSystem = (new Path(factoryUri)).getFileSystem(hiveHdfsConfiguration.getConfiguration(context, factoryUri));
                 checkState(fileSystem instanceof ExtendedFileSystem);
-                ExtendedFileSystem dataTierFileSystem = (ExtendedFileSystem) fileSystem;
                 if (cacheConfig.isCachingEnabled() && cacheConfig.getCacheType() == ALLUXIO) {
-                    dataTierFileSystem = cacheFactory.createCachingFileSystem(factoryConfig, factoryUri, fileSystem);
+                    return cacheFactory.createCachingFileSystem(factoryConfig, factoryUri, fileSystem);
                 }
                 return new CachingFileSystem(
                         factoryUri,
                         factoryConfig,
                         cacheManager,
-                        dataTierFileSystem,
+                        (ExtendedFileSystem) fileSystem,
                         cacheConfig.isValidationEnabled());
             }
             catch (IOException e) {

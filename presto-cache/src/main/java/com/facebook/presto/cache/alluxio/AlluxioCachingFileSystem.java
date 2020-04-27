@@ -15,7 +15,6 @@ package com.facebook.presto.cache.alluxio;
 
 import alluxio.AlluxioURI;
 import alluxio.client.file.cache.LocalCacheFileSystem;
-import alluxio.conf.AlluxioConfiguration;
 import alluxio.conf.AlluxioProperties;
 import alluxio.conf.InstancedConfiguration;
 import alluxio.conf.PropertyKey;
@@ -48,6 +47,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 
+import static java.util.Objects.requireNonNull;
+
 public class AlluxioCachingFileSystem
         extends ExtendedFileSystem
 {
@@ -67,6 +68,8 @@ public class AlluxioCachingFileSystem
     public synchronized void initialize(URI uri, Configuration conf)
             throws IOException
     {
+        requireNonNull(uri, "uri is null");
+        requireNonNull(conf, "conf is null");
         super.initialize(uri, conf);
 
         // Take the URI properties, hadoop configuration, and given Alluxio configuration and merge
@@ -88,11 +91,6 @@ public class AlluxioCachingFileSystem
 
         this.cachingFs = new alluxio.hadoop.FileSystem(localCacheSystem);
         cachingFs.initialize(uri, conf);
-    }
-
-    private AlluxioCachingClientFileSystem getAlluxioCachingClientFileSystem(FileSystem fileSystem, AlluxioConfiguration alluxioConfiguration)
-    {
-        return new AlluxioCachingClientFileSystem(fileSystem, alluxioConfiguration);
     }
 
     @Override
