@@ -14,11 +14,13 @@
 package com.facebook.presto.cache.alluxio;
 
 import alluxio.AlluxioURI;
+import alluxio.client.file.URIStatus;
 import alluxio.client.file.cache.LocalCacheFileSystem;
 import alluxio.conf.AlluxioProperties;
 import alluxio.conf.InstancedConfiguration;
 import alluxio.conf.PropertyKey;
 import alluxio.conf.Source;
+import alluxio.hadoop.AbstractFileSystem;
 import alluxio.hadoop.HadoopConfigurationUtils;
 import alluxio.metrics.MetricsConfig;
 import alluxio.metrics.MetricsSystem;
@@ -27,7 +29,6 @@ import alluxio.uri.SingleMasterAuthority;
 import alluxio.uri.ZookeeperAuthority;
 import alluxio.util.ConfigurationUtils;
 import com.facebook.presto.cache.CacheFactory;
-import com.facebook.presto.cache.CachingFileSystem;
 import com.facebook.presto.hive.HiveFileContext;
 import com.facebook.presto.hive.HiveFileInfo;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -51,18 +52,13 @@ import java.util.Properties;
 import static java.util.Objects.requireNonNull;
 
 public class AlluxioCachingFileSystem
-        extends CachingFileSystem
+        extends ExtendedFileSystem
 {
-    private alluxio.hadoop.FileSystem cachingFs;
-    private final ExtendedFileSystem fileSystem;
-    private final Configuration configuration;
-    private final CacheFactory cacheFactory;
+    private AlluxioCachingFileSystemInternal cachingFs;
 
     public AlluxioCachingFileSystem(Configuration configuration, URI uri, ExtendedFileSystem fileSystem, CacheFactory cacheFactory)
     {
-        this.fileSystem = fileSystem;
-        this.configuration = configuration;
-        this.cacheFactory = cacheFactory;
+        this.cachingFs = new AlluxioCachingFileSystemInternal(configuration, uri, fileSystem, cacheFactory);
     }
 
     @Override
@@ -71,26 +67,6 @@ public class AlluxioCachingFileSystem
     {
         requireNonNull(uri, "uri is null");
         requireNonNull(conf, "conf is null");
-        super.initialize(uri, conf);
-
-        // Take the URI properties, hadoop configuration, and given Alluxio configuration and merge
-        // all three into a single object.
-        AlluxioProperties alluxioProps = ConfigurationUtils.defaults();
-        InstancedConfiguration newConf = HadoopConfigurationUtils.mergeHadoopConfiguration(conf,
-                alluxioProps);
-        // Connection details in the URI has the highest priority
-        newConf.merge(getConfigurationFromUri(uri), Source.RUNTIME);
-
-        // Handle metrics
-        Properties metricsProps = new Properties();
-        for (Map.Entry<String, String> e : conf) {
-            metricsProps.setProperty(e.getKey(), e.getValue());
-        }
-        MetricsSystem.startSinksFromConfig(new MetricsConfig(metricsProps));
-        LocalCacheFileSystem localCacheSystem = new LocalCacheFileSystem(
-                new AlluxioCachingClientFileSystem(fileSystem, newConf), newConf);
-
-        this.cachingFs = new alluxio.hadoop.FileSystem(localCacheSystem);
         cachingFs.initialize(uri, conf);
     }
 
@@ -175,39 +151,6 @@ public class AlluxioCachingFileSystem
         return cachingFs.getFileStatus(f);
     }
 
-    static Map<String, Object> getConfigurationFromUri(URI uri)
-    {
-        AlluxioURI alluxioUri = new AlluxioURI(uri.toString());
-        Map<String, Object> alluxioConfProperties = new HashMap<>();
-
-        if (alluxioUri.getAuthority() instanceof ZookeeperAuthority) {
-            ZookeeperAuthority authority = (ZookeeperAuthority) alluxioUri.getAuthority();
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), true);
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(),
-                    authority.getZookeeperAddress());
-        }
-        else if (alluxioUri.getAuthority() instanceof SingleMasterAuthority) {
-            SingleMasterAuthority authority = (SingleMasterAuthority) alluxioUri.getAuthority();
-            alluxioConfProperties.put(PropertyKey.MASTER_HOSTNAME.getName(), authority.getHost());
-            alluxioConfProperties.put(PropertyKey.MASTER_RPC_PORT.getName(), authority.getPort());
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), false);
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(), null);
-            // Unset the embedded journal related configuration
-            // to support alluxio URI has the highest priority
-            alluxioConfProperties.put(PropertyKey.MASTER_EMBEDDED_JOURNAL_ADDRESSES.getName(), null);
-            alluxioConfProperties.put(PropertyKey.MASTER_RPC_ADDRESSES.getName(), null);
-        }
-        else if (alluxioUri.getAuthority() instanceof MultiMasterAuthority) {
-            MultiMasterAuthority authority = (MultiMasterAuthority) alluxioUri.getAuthority();
-            alluxioConfProperties.put(PropertyKey.MASTER_RPC_ADDRESSES.getName(),
-                    authority.getMasterAddresses());
-            // Unset the zookeeper configuration to support alluxio URI has the highest priority
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), false);
-            alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(), null);
-        }
-        return alluxioConfProperties;
-    }
-
     @Override
     public FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext)
             throws Exception
@@ -227,5 +170,116 @@ public class AlluxioCachingFileSystem
             throws IOException
     {
         throw new UnsupportedOperationException();
+    }
+
+    class AlluxioCachingFileSystemInternal
+            extends AbstractFileSystem
+    {
+        private final ExtendedFileSystem fileSystem;
+        private final Configuration configuration;
+        private final CacheFactory cacheFactory;
+
+        AlluxioCachingFileSystemInternal(Configuration configuration, URI uri, ExtendedFileSystem fileSystem, CacheFactory cacheFactory)
+        {
+            this.fileSystem = fileSystem;
+            this.configuration = configuration;
+            this.cacheFactory = cacheFactory;
+        }
+
+        @Override
+        public synchronized void initialize(URI uri, Configuration conf)
+        {
+            // Set statistics
+            setConf(conf);
+            statistics = getStatistics(uri.getScheme(), getClass());
+
+            // Take the URI properties, hadoop configuration, and given Alluxio configuration and merge
+            // all three into a single object.
+            Map<String, Object> uriConfProperties = getConfigurationFromUri(uri);
+            AlluxioProperties alluxioProps = ConfigurationUtils.defaults();
+            InstancedConfiguration newConf = HadoopConfigurationUtils.mergeHadoopConfiguration(conf,
+                    alluxioProps);
+            // Connection details in the URI has the highest priority
+            newConf.merge(uriConfProperties, Source.RUNTIME);
+            mAlluxioConf = newConf;
+
+            // Handle metrics
+            Properties metricsProps = new Properties();
+            for (Map.Entry<String, String> e : conf) {
+                metricsProps.setProperty(e.getKey(), e.getValue());
+            }
+            MetricsSystem.startSinksFromConfig(new MetricsConfig(metricsProps));
+            mFileSystem = new LocalCacheFileSystem(
+                    new AlluxioCachingClientFileSystem(fileSystem, mAlluxioConf), mAlluxioConf);
+        }
+
+        @Override
+        public String getScheme()
+        {
+            return fileSystem.getScheme();
+        }
+
+        @Override
+        protected boolean isZookeeperMode()
+        {
+            return this.mFileSystem.getConf().getBoolean(PropertyKey.ZOOKEEPER_ENABLED);
+        }
+
+        @Override
+        protected Map<String, Object> getConfigurationFromUri(URI uri)
+        {
+            AlluxioURI alluxioUri = new AlluxioURI(uri.toString());
+            Map<String, Object> alluxioConfProperties = new HashMap<>();
+
+            if (alluxioUri.getAuthority() instanceof ZookeeperAuthority) {
+                ZookeeperAuthority authority = (ZookeeperAuthority) alluxioUri.getAuthority();
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), true);
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(),
+                        authority.getZookeeperAddress());
+            }
+            else if (alluxioUri.getAuthority() instanceof SingleMasterAuthority) {
+                SingleMasterAuthority authority = (SingleMasterAuthority) alluxioUri.getAuthority();
+                alluxioConfProperties.put(PropertyKey.MASTER_HOSTNAME.getName(), authority.getHost());
+                alluxioConfProperties.put(PropertyKey.MASTER_RPC_PORT.getName(), authority.getPort());
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), false);
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(), null);
+                // Unset the embedded journal related configuration
+                // to support alluxio URI has the highest priority
+                alluxioConfProperties.put(PropertyKey.MASTER_EMBEDDED_JOURNAL_ADDRESSES.getName(), null);
+                alluxioConfProperties.put(PropertyKey.MASTER_RPC_ADDRESSES.getName(), null);
+            }
+            else if (alluxioUri.getAuthority() instanceof MultiMasterAuthority) {
+                MultiMasterAuthority authority = (MultiMasterAuthority) alluxioUri.getAuthority();
+                alluxioConfProperties.put(PropertyKey.MASTER_RPC_ADDRESSES.getName(),
+                        authority.getMasterAddresses());
+                // Unset the zookeeper configuration to support alluxio URI has the highest priority
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ENABLED.getName(), false);
+                alluxioConfProperties.put(PropertyKey.ZOOKEEPER_ADDRESS.getName(), null);
+            }
+            return alluxioConfProperties;
+        }
+
+        @Override
+        protected void validateFsUri(URI fsUri)
+        {
+        }
+
+        @Override
+        protected String getFsScheme(URI fsUri)
+        {
+            return getScheme();
+        }
+
+        @Override
+        protected AlluxioURI getAlluxioPath(Path path)
+        {
+            return new AlluxioURI(path.toString());
+        }
+
+        @Override
+        protected Path getFsPath(String fsUriHeader, URIStatus fileStatus)
+        {
+            return new Path(fsUriHeader + fileStatus.getPath());
+        }
     }
 }

@@ -13,9 +13,484 @@
  */
 package com.facebook.presto.cache;
 
+import com.facebook.presto.hive.HiveFileContext;
+import com.facebook.presto.hive.HiveFileInfo;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.fs.ContentSummary;
+import org.apache.hadoop.fs.CreateFlag;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileChecksum;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FsServerDefaults;
+import org.apache.hadoop.fs.FsStatus;
+import org.apache.hadoop.fs.LocatedFileStatus;
+import org.apache.hadoop.fs.Options;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RemoteIterator;
+import org.apache.hadoop.fs.XAttrSetFlag;
+import org.apache.hadoop.fs.permission.AclEntry;
+import org.apache.hadoop.fs.permission.AclStatus;
+import org.apache.hadoop.fs.permission.FsAction;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.security.Credentials;
+import org.apache.hadoop.security.token.Token;
+import org.apache.hadoop.util.Progressable;
 
-public abstract class CachingFileSystem
+import java.io.IOException;
+import java.net.URI;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+
+public class CachingFileSystem
         extends ExtendedFileSystem
 {
+    private final ExtendedFileSystem cachingFs;
+
+    public CachingFileSystem(ExtendedFileSystem fs)
+    {
+        this.cachingFs = fs;
+    }
+
+    @Override
+    public String getScheme()
+    {
+        return cachingFs.getScheme();
+    }
+
+    @Override
+    public URI getUri()
+    {
+        return cachingFs.getUri();
+    }
+
+    @Override
+    public void initialize(URI uri, Configuration configuration)
+            throws IOException
+    {
+        cachingFs.initialize(uri, configuration);
+    }
+
+    @Override
+    public Path getWorkingDirectory()
+    {
+        return cachingFs.getWorkingDirectory();
+    }
+
+    @Override
+    public void setWorkingDirectory(Path workingDirectory)
+    {
+        cachingFs.setWorkingDirectory(workingDirectory);
+    }
+
+    @Override
+    public long getDefaultBlockSize()
+    {
+        return cachingFs.getDefaultBlockSize();
+    }
+
+    @Override
+    public short getDefaultReplication()
+    {
+        return cachingFs.getDefaultReplication();
+    }
+
+    @Override
+    public Path getHomeDirectory()
+    {
+        return cachingFs.getHomeDirectory();
+    }
+
+    @Override
+    public BlockLocation[] getFileBlockLocations(FileStatus fileStatus, long offset, long length)
+            throws IOException
+    {
+        return cachingFs.getFileBlockLocations(fileStatus, offset, length);
+    }
+
+    @Override
+    public BlockLocation[] getFileBlockLocations(Path path, long offset, long length)
+            throws IOException
+    {
+        return cachingFs.getFileBlockLocations(path, offset, length);
+    }
+
+    @Override
+    public void setVerifyChecksum(boolean verifyChecksum)
+    {
+        cachingFs.setVerifyChecksum(verifyChecksum);
+    }
+
+    @Override
+    public FSDataInputStream open(Path path, int bufferSize)
+            throws IOException
+    {
+        return cachingFs.open(path, bufferSize);
+    }
+
+    @Override
+    public FSDataInputStream openFile(Path path, HiveFileContext hiveFileContext)
+            throws Exception
+    {
+        return cachingFs.openFile(path, hiveFileContext);
+    }
+
+    @Override
+    public FSDataOutputStream append(Path path, int bufferSize, Progressable progressable)
+            throws IOException
+    {
+        return cachingFs.append(path, bufferSize, progressable);
+    }
+
+    @Override
+    public FSDataOutputStream create(
+            Path path,
+            FsPermission permission,
+            boolean overwrite,
+            int bufferSize,
+            short replication,
+            long blockSize,
+            Progressable progressable)
+            throws IOException
+    {
+        return cachingFs.create(path, permission, overwrite, bufferSize, replication, blockSize, progressable);
+    }
+
+    @Override
+    public FSDataOutputStream create(
+            Path path,
+            FsPermission permission,
+            EnumSet<CreateFlag> createFlags,
+            int bufferSize,
+            short replication,
+            long blockSize,
+            Progressable progressable,
+            Options.ChecksumOpt checksumOption)
+            throws IOException
+    {
+        return cachingFs.create(path, permission, createFlags, bufferSize, replication, blockSize, progressable, checksumOption);
+    }
+
+    @Override
+    public boolean setReplication(Path path, short replication)
+            throws IOException
+    {
+        return cachingFs.setReplication(path, replication);
+    }
+
+    @Override
+    public void concat(Path targetPath, Path[] sourcePaths)
+            throws IOException
+    {
+        cachingFs.concat(targetPath, sourcePaths);
+    }
+
+    @Override
+    public boolean rename(Path source, Path destination)
+            throws IOException
+    {
+        return cachingFs.rename(source, destination);
+    }
+
+    @Override
+    public boolean truncate(Path path, long length)
+            throws IOException
+    {
+        return cachingFs.truncate(path, length);
+    }
+
+    @Override
+    public boolean delete(Path path, boolean recursive)
+            throws IOException
+    {
+        return cachingFs.delete(path, recursive);
+    }
+
+    @Override
+    public ContentSummary getContentSummary(Path path)
+            throws IOException
+    {
+        return cachingFs.getContentSummary(path);
+    }
+
+    @Override
+    public FileStatus[] listStatus(Path path)
+            throws IOException
+    {
+        return cachingFs.listStatus(path);
+    }
+
+    @Override
+    public RemoteIterator<FileStatus> listStatusIterator(Path path)
+            throws IOException
+    {
+        return cachingFs.listStatusIterator(path);
+    }
+
+    @Override
+    public boolean mkdirs(Path path, FsPermission permission)
+            throws IOException
+    {
+        return cachingFs.mkdirs(path, permission);
+    }
+
+    @Override
+    public void close()
+            throws IOException
+    {
+        cachingFs.close();
+    }
+
+    @Override
+    public String toString()
+    {
+        return "CachingFileSystem[" +
+                "cachingFs=" + cachingFs +
+                ']';
+    }
+
+    @Override
+    public FsStatus getStatus(Path path)
+            throws IOException
+    {
+        return cachingFs.getStatus(path);
+    }
+
+    @Override
+    public RemoteIterator<Path> listCorruptFileBlocks(Path path)
+            throws IOException
+    {
+        return cachingFs.listCorruptFileBlocks(path);
+    }
+
+    @Override
+    public FsServerDefaults getServerDefaults()
+            throws IOException
+    {
+        return cachingFs.getServerDefaults();
+    }
+
+    @Override
+    public FileStatus getFileStatus(Path path)
+            throws IOException
+    {
+        return cachingFs.getFileStatus(path);
+    }
+
+    @Override
+    public void createSymlink(Path target, Path link, boolean createParent)
+            throws IOException
+    {
+        cachingFs.createSymlink(target, link, createParent);
+    }
+
+    @Override
+    public boolean supportsSymlinks()
+    {
+        return cachingFs.supportsSymlinks();
+    }
+
+    @Override
+    public FileStatus getFileLinkStatus(Path path)
+            throws IOException
+    {
+        return cachingFs.getFileLinkStatus(path);
+    }
+
+    @Override
+    public Path getLinkTarget(Path path)
+            throws IOException
+    {
+        return cachingFs.getLinkTarget(path);
+    }
+
+    @Override
+    public FileChecksum getFileChecksum(Path path)
+            throws IOException
+    {
+        return cachingFs.getFileChecksum(path);
+    }
+
+    @Override
+    public FileChecksum getFileChecksum(Path path, long length)
+            throws IOException
+    {
+        return cachingFs.getFileChecksum(path, length);
+    }
+
+    @Override
+    public void setPermission(Path path, FsPermission permission)
+            throws IOException
+    {
+        cachingFs.setPermission(path, permission);
+    }
+
+    @Override
+    public void setOwner(Path path, String user, String group)
+            throws IOException
+    {
+        cachingFs.setOwner(path, user, group);
+    }
+
+    @Override
+    public void setTimes(Path path, long modificationTime, long accessTime)
+            throws IOException
+    {
+        cachingFs.setTimes(path, modificationTime, accessTime);
+    }
+
+    @Override
+    public Token<?> getDelegationToken(String renewer)
+            throws IOException
+    {
+        return cachingFs.getDelegationToken(renewer);
+    }
+
+    @Override
+    public String getCanonicalServiceName()
+    {
+        return cachingFs.getCanonicalServiceName();
+    }
+
+    @Override
+    public Path createSnapshot(Path path, String snapshotName)
+            throws IOException
+    {
+        return cachingFs.createSnapshot(path, snapshotName);
+    }
+
+    @Override
+    public void renameSnapshot(Path path, String snapshotOldName, String snapshotNewName)
+            throws IOException
+    {
+        cachingFs.renameSnapshot(path, snapshotOldName, snapshotNewName);
+    }
+
+    @Override
+    public void deleteSnapshot(Path snapshotDirectory, String snapshotName)
+            throws IOException
+    {
+        cachingFs.deleteSnapshot(snapshotDirectory, snapshotName);
+    }
+
+    @Override
+    public void modifyAclEntries(Path path, List<AclEntry> aclEntries)
+            throws IOException
+    {
+        cachingFs.modifyAclEntries(path, aclEntries);
+    }
+
+    @Override
+    public void removeAclEntries(Path path, List<AclEntry> aclEntries)
+            throws IOException
+    {
+        cachingFs.removeAclEntries(path, aclEntries);
+    }
+
+    @Override
+    public void removeDefaultAcl(Path path)
+            throws IOException
+    {
+        cachingFs.removeDefaultAcl(path);
+    }
+
+    @Override
+    public void removeAcl(Path path)
+            throws IOException
+    {
+        cachingFs.removeAcl(path);
+    }
+
+    @Override
+    public void setAcl(Path path, List<AclEntry> aclEntries)
+            throws IOException
+    {
+        cachingFs.setAcl(path, aclEntries);
+    }
+
+    @Override
+    public AclStatus getAclStatus(Path path)
+            throws IOException
+    {
+        return cachingFs.getAclStatus(path);
+    }
+
+    @Override
+    public void setXAttr(Path path, String name, byte[] value, EnumSet<XAttrSetFlag> xAttrSetFlags)
+            throws IOException
+    {
+        cachingFs.setXAttr(path, name, value, xAttrSetFlags);
+    }
+
+    @Override
+    public byte[] getXAttr(Path path, String name)
+            throws IOException
+    {
+        return cachingFs.getXAttr(path, name);
+    }
+
+    @Override
+    public Map<String, byte[]> getXAttrs(Path path)
+            throws IOException
+    {
+        return cachingFs.getXAttrs(path);
+    }
+
+    @Override
+    public Map<String, byte[]> getXAttrs(Path path, List<String> names)
+            throws IOException
+    {
+        return cachingFs.getXAttrs(path, names);
+    }
+
+    @Override
+    public List<String> listXAttrs(Path path)
+            throws IOException
+    {
+        return cachingFs.listXAttrs(path);
+    }
+
+    @Override
+    public void removeXAttr(Path path, String name)
+            throws IOException
+    {
+        cachingFs.removeXAttr(path, name);
+    }
+
+    @Override
+    public void access(Path path, FsAction mode)
+            throws IOException
+    {
+        cachingFs.access(path, mode);
+    }
+
+    @Override
+    public Token<?>[] addDelegationTokens(String renewer, Credentials credentials)
+            throws IOException
+    {
+        return cachingFs.addDelegationTokens(renewer, credentials);
+    }
+
+    @Override
+    public Path makeQualified(Path path)
+    {
+        return cachingFs.makeQualified(path);
+    }
+
+    @Override
+    public RemoteIterator<LocatedFileStatus> listDirectory(Path path)
+            throws IOException
+    {
+        return cachingFs.listDirectory(path);
+    }
+
+    @Override
+    public RemoteIterator<HiveFileInfo> listFiles(Path path)
+            throws IOException
+    {
+        return cachingFs.listFiles(path);
+    }
 }

@@ -14,7 +14,6 @@
 package com.facebook.presto.cache.basic;
 
 import com.facebook.presto.cache.CacheManager;
-import com.facebook.presto.cache.CachingFileSystem;
 import com.facebook.presto.hive.HiveFileContext;
 import com.facebook.presto.hive.HiveFileInfo;
 import com.facebook.presto.hive.filesystem.ExtendedFileSystem;
@@ -50,7 +49,7 @@ import java.util.Map;
 import static java.util.Objects.requireNonNull;
 
 public final class BasicCachingFileSystem
-        extends CachingFileSystem
+        extends ExtendedFileSystem
 {
     private final URI uri;
     private final CacheManager cacheManager;
@@ -272,7 +271,7 @@ public final class BasicCachingFileSystem
     @Override
     public String toString()
     {
-        return "CachingFileSystem[" +
+        return "BasicCachingFileSystem[" +
                 "dataTier=" + dataTier +
                 ']';
     }

@@ -32,14 +32,21 @@ public class HiveCacheFactory
     public CachingFileSystem createCachingFileSystem(Configuration configuration, URI uri,
             ExtendedFileSystem fileSystem, CacheManager cacheManager, CacheConfig cacheConfig)
     {
+        ExtendedFileSystem fs;
         if (cacheConfig.isCachingEnabled() && cacheConfig.getCacheType() == ALLUXIO) {
-            return new AlluxioCachingFileSystem(configuration, uri, fileSystem, this);
+            fs = new AlluxioCachingFileSystem(configuration,
+                    uri,
+                    fileSystem,
+                    this);
         }
-        return new BasicCachingFileSystem(
-            uri,
-            configuration,
-            cacheManager,
-            fileSystem,
-            cacheConfig.isValidationEnabled());
+        else {
+            fs = new BasicCachingFileSystem(
+                    uri,
+                    configuration,
+                    cacheManager,
+                    fileSystem,
+                    cacheConfig.isValidationEnabled());
+        }
+        return new CachingFileSystem(fs);
     }
 }
